@@ -36,9 +36,7 @@ def _exit_code_argument(value):
     try:
         code = int(value)
     except ValueError:
-        raise CommandError(
-            f"Exit codes must be whole numbers, not {value!r}"
-        ) from None
+        raise CommandError(f"Exit codes must be whole numbers, not {value!r}") from None
     if not 0 <= code <= 255:
         raise CommandError(f"Exit codes must be between 0 and 255, not {value}")
     return code
@@ -209,6 +207,13 @@ class Command(BaseCommand):
             )
 
         exit_code = self._exit_code(tasks_processed, empty_exit_code, failed_exit_code)
+
+        # Mirrors django-database-task's run_database_tasks: a human running
+        # the command on a terminal sees the failure count, not just the
+        # log line. The Worker finished log record carries the same number
+        # for a JSON operator.
+        if self.tasks_failed:
+            self.stdout.write(self.style.ERROR(f"Tasks failed: {self.tasks_failed}"))
 
         # The Worker finished record is what an operator greps for in a JSON
         # log stream: counts and the exit code stay attached as fields rather

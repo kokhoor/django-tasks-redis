@@ -53,41 +53,62 @@ class TestExitCodeSelection:
     def test_zero_when_neither_option_is_set(self):
         command = Command()
         command.tasks_failed = 0
-        assert command._exit_code(tasks_processed=0, empty_exit_code=0, failed_exit_code=0) == 0
+        assert (
+            command._exit_code(tasks_processed=0, empty_exit_code=0, failed_exit_code=0)
+            == 0
+        )
 
     def test_zero_after_a_successful_run_when_neither_option_is_set(self):
         command = Command()
         command.tasks_failed = 0
-        assert command._exit_code(tasks_processed=5, empty_exit_code=0, failed_exit_code=0) == 0
+        assert (
+            command._exit_code(tasks_processed=5, empty_exit_code=0, failed_exit_code=0)
+            == 0
+        )
 
     def test_empty_code_when_nothing_ran(self):
         command = Command()
         command.tasks_failed = 0
-        assert command._exit_code(tasks_processed=0, empty_exit_code=4, failed_exit_code=0) == 4
+        assert (
+            command._exit_code(tasks_processed=0, empty_exit_code=4, failed_exit_code=0)
+            == 4
+        )
 
     def test_zero_after_a_run_when_only_empty_code_is_set(self):
         command = Command()
         command.tasks_failed = 0
-        assert command._exit_code(tasks_processed=3, empty_exit_code=4, failed_exit_code=0) == 0
+        assert (
+            command._exit_code(tasks_processed=3, empty_exit_code=4, failed_exit_code=0)
+            == 0
+        )
 
     def test_failed_code_when_a_task_failed(self):
         command = Command()
         command.tasks_failed = 1
-        assert command._exit_code(tasks_processed=1, empty_exit_code=4, failed_exit_code=1) == 1
+        assert (
+            command._exit_code(tasks_processed=1, empty_exit_code=4, failed_exit_code=1)
+            == 1
+        )
 
     def test_failed_code_wins_when_both_conditions_hold(self):
         command = Command()
         # Nothing was processed (could not run it at all) AND a failure was
         # counted — the failure wins.
         command.tasks_failed = 1
-        assert command._exit_code(tasks_processed=0, empty_exit_code=4, failed_exit_code=1) == 1
+        assert (
+            command._exit_code(tasks_processed=0, empty_exit_code=4, failed_exit_code=1)
+            == 1
+        )
 
     def test_zero_when_failure_code_is_unset_even_if_a_task_failed(self):
         command = Command()
         command.tasks_failed = 1
         # Default behaviour is preserved: a failure that the user did not
         # opt into leaves the exit code alone.
-        assert command._exit_code(tasks_processed=1, empty_exit_code=0, failed_exit_code=0) == 0
+        assert (
+            command._exit_code(tasks_processed=1, empty_exit_code=0, failed_exit_code=0)
+            == 0
+        )
 
 
 @pytest.mark.django_db
