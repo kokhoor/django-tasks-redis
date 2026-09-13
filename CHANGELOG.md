@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**`get_auth_handler()` is gone.** A project that overrides the singular hook
+has to move to `get_auth_handlers()` or every call answers `403`; the `403`
+body names the method to override.
+
 ### Added
 
 - **`get_auth_handlers(endpoint=None)` and the `AUTH_HANDLERS` /
@@ -21,26 +25,8 @@
   Secrets are read from a setting or an environment variable by name rather
   than written into `OPTIONS`. `BaseAuthHandler`, `HMACAuth`,
   `SharedSecretAuth`, `StaffOnlyAuth`, `build_signature` and `AUTH_ENDPOINTS`
-  are importable from `django_tasks_redis`.
+  are importable from `django_tasks_redis.auth`.
   ([#25](https://github.com/tokibito/django-tasks-redis/issues/25))
-
-### Changed
-
-- The HTTP task endpoints run every handler a backend returns from
-  `get_auth_handlers()`, not just one. The empty-list-stays-closed behavior
-  from 0.2.0 is kept: a backend that returns no handlers still answers `403`
-  on every endpoint.
-
-### Deprecated
-
-- `RedisTaskBackend.get_auth_handler()` (singular). It still works, with a
-  `DeprecationWarning` emitted once per backend when a subclass overrides it,
-  and is removed in 0.4. Override `get_auth_handlers()` or configure
-  `AUTH_HANDLERS` instead.
-  ([#25](https://github.com/tokibito/django-tasks-redis/issues/25))
-
-### Added
-
 - **`backend.broker`, a `RedisStreamsBroker`** with the consuming interface
   django-database-task gives its pull brokers: `receive()` returns
   `BrokerMessage` objects, `ack()` sends `XACK` and `XDEL`, `nack()` leaves
@@ -50,7 +36,6 @@
   functions still work as they did, as wrappers over the broker. A backend
   subclass can name another class with `broker_class`.
   ([#26](https://github.com/tokibito/django-tasks-redis/issues/26))
-
 - **Graceful shutdown for `run_redis_tasks`**, the one django-database-task
   has. On `SIGTERM` or `SIGINT` the worker starts no new task, finishes the
   one it is running, writes its result and exits 0; a second signal forces
@@ -65,6 +50,26 @@
   `django_tasks_redis` for a worker loop or a task function of your own, and
   `executor.process_tasks()` takes a `stop_event`.
   ([#22](https://github.com/tokibito/django-tasks-redis/issues/22))
+
+### Changed
+
+- The HTTP task endpoints run every handler a backend returns from
+  `get_auth_handlers()`, not just one. The empty-list-stays-closed behavior
+  from 0.2.0 is kept: a backend that returns no handlers still answers `403`
+  on every endpoint.
+- `RedisTaskBackend.run_task()` takes `from_statuses` and returns `None`
+  instead of a `TaskResult` when the task is not in one of them. A caller
+  that used it directly on a task it had already moved to RUNNING now gets
+  `None`; let `run_task()` do the claim instead.
+- `run_redis_tasks` receives from the broker and acknowledges each message
+  after the task ran, the way `run_database_tasks` does against a pull
+  broker. Its options and output are unchanged.
+- `executor.fetch_task()` still returns the task hash with the message handle
+  under `_stream_key` and `_message_id`, but the handle is no longer how the
+  worker acknowledges a message. Use `backend.broker.receive()` and `ack()`
+  for a loop of your own.
+- `RedisTaskBackend._ensure_consumer_group()`, a private method, is gone;
+  `backend.broker.ensure_consumer_group(stream_key)` replaces it.
 
 ### Fixed
 
@@ -90,21 +95,6 @@
   would lose them.
   ([#19](https://github.com/tokibito/django-tasks-redis/issues/19))
 
-### Changed
-
-- `RedisTaskBackend.run_task()` takes `from_statuses` and returns `None`
-  instead of a `TaskResult` when the task is not in one of them. A caller
-  that used it directly on a task it had already moved to RUNNING now gets
-  `None`; let `run_task()` do the claim instead.
-- `run_redis_tasks` receives from the broker and acknowledges each message
-  after the task ran, the way `run_database_tasks` does against a pull
-  broker. Its options and output are unchanged.
-- `executor.fetch_task()` still returns the task hash with the message handle
-  under `_stream_key` and `_message_id`, but the handle is no longer how the
-  worker acknowledges a message. Use `backend.broker.receive()` and `ack()`
-  for a loop of your own.
-- `RedisTaskBackend._ensure_consumer_group()`, a private method, is gone;
-  `backend.broker.ensure_consumer_group(stream_key)` replaces it.
 ## 0.2.1
 
 ### Fixed

@@ -2,8 +2,6 @@
 Tests for views module.
 """
 
-import warnings
-
 import pytest
 from django.conf import settings
 from django.http import JsonResponse
@@ -11,19 +9,6 @@ from django.tasks import task_backends
 from django.test import Client, override_settings
 
 from django_tasks_redis import executor
-from django_tasks_redis.backends import RedisTaskBackend
-
-
-class LegacyHandlerBackend(RedisTaskBackend):
-    """Backend that still overrides the deprecated get_auth_handler()."""
-
-    def get_auth_handler(self):
-        def handler(request):
-            if request.headers.get("X-Task-Token") != "legacy-token":
-                return JsonResponse({"error": "Forbidden"}, status=403)
-            return None
-
-        return handler
 
 
 @pytest.mark.django_db
@@ -230,65 +215,6 @@ class TestTaskEndpointAuth:
                 "/tasks/run/", {"backend_name": "configured"}
             )
             assert good.status_code == 200
-
-    def test_deprecated_get_auth_handler_override_still_works_with_warning(
-        self, clean_redis
-    ):
-        """A subclass still overriding get_auth_handler() emits a warning
-        and its return value is used as the sole handler."""
-
-        legacy = {
-            **settings.TASKS,
-            "legacy": {
-                "BACKEND": "tests.test_views.LegacyHandlerBackend",
-                "QUEUES": [],
-                "OPTIONS": settings.TASKS["default"]["OPTIONS"],
-            },
-        }
-
-        with (
-            override_settings(TASKS=legacy),
-            warnings.catch_warnings(record=True) as caught,
-        ):
-            warnings.simplefilter("always")
-            bad = Client().post("/tasks/run/", {"backend_name": "legacy"})
-            assert bad.status_code == 403
-
-        deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-        assert deprecations, "expected a DeprecationWarning"
-        assert "get_auth_handler()" in str(deprecations[0].message)
-        assert "get_auth_handlers" in str(deprecations[0].message)
-
-        # And the legacy handler is still actually called: the right token
-        # reaches the view.
-        with override_settings(TASKS=legacy):
-            good = Client(headers={"x-task-token": "legacy-token"}).post(
-                "/tasks/run/", {"backend_name": "legacy"}
-            )
-        assert good.status_code == 200
-
-    def test_deprecation_warning_emitted_once_per_backend(self, clean_redis):
-        """The warning fires on the first use, not on every request."""
-        legacy = {
-            **settings.TASKS,
-            "legacy": {
-                "BACKEND": "tests.test_views.LegacyHandlerBackend",
-                "QUEUES": [],
-                "OPTIONS": settings.TASKS["default"]["OPTIONS"],
-            },
-        }
-
-        client = Client()
-        with (
-            override_settings(TASKS=legacy),
-            warnings.catch_warnings(record=True) as caught,
-        ):
-            warnings.simplefilter("always")
-            for _ in range(3):
-                client.post("/tasks/run/", {"backend_name": "legacy"})
-
-        deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-        assert len(deprecations) == 1
 
 
 @pytest.mark.django_db
