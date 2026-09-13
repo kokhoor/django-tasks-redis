@@ -6,13 +6,20 @@ names, and acknowledges the message. It is the same loop `run_database_tasks`
 runs against a pull broker in django-database-task, with the same graceful
 shutdown: on SIGTERM or SIGINT no new task is started, the running one is
 finished and its result written, and the process exits.
+
+The exit code the process leaves behind is 0 by default, so existing cron
+lines and Kubernetes `Job`s see no change. `--empty-exit-code` and
+`--failed-exit-code` opt in to scheduler-friendly codes a JP1, Hinemos,
+Rundeck, cron or systemd timer can branch on; both default to 0 and are
+clamped to 0–255, the range the operating system actually reports.
 """
 
 import logging
+import sys
 from contextlib import ExitStack
 from time import monotonic
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.tasks import task_backends
 from django.tasks.base import TaskResultStatus
 from django.utils.translation import gettext_lazy as _
@@ -22,6 +29,19 @@ from django_tasks_redis.shutdown import GracefulShutdown, signal_name
 from django_tasks_redis.utils import generate_worker_id
 
 logger = logging.getLogger("django_tasks_redis")
+
+
+def _exit_code_argument(value):
+    """Parse an exit-code option, rejecting what a shell cannot report."""
+    try:
+        code = int(value)
+    except ValueError:
+        raise CommandError(
+            f"Exit codes must be whole numbers, not {value!r}"
+        ) from None
+    if not 0 <= code <= 255:
+        raise CommandError(f"Exit codes must be between 0 and 255, not {value}")
+    return code
 
 
 class Command(BaseCommand):
@@ -81,6 +101,28 @@ class Command(BaseCommand):
                 "terminated immediately, even while a task is running"
             ),
         )
+        parser.add_argument(
+            "--empty-exit-code",
+            type=_exit_code_argument,
+            default=0,
+            metavar="CODE",
+            help=_(
+                "Exit with this code when no task was processed, so a job "
+                "scheduler can tell an idle run from a real one "
+                "(0=exit normally, default: 0)"
+            ),
+        )
+        parser.add_argument(
+            "--failed-exit-code",
+            type=_exit_code_argument,
+            default=0,
+            metavar="CODE",
+            help=_(
+                "Exit with this code when at least one task failed or could "
+                "not be run. Takes precedence over --empty-exit-code "
+                "(0=exit normally, default: 0)"
+            ),
+        )
 
     def handle(self, *args, **options):
         queue_name = options["queue_name"]
@@ -91,6 +133,8 @@ class Command(BaseCommand):
         claim_interval = options["claim_interval"]
         shutdown_timeout = options["shutdown_timeout"]
         graceful = not options["no_graceful_shutdown"]
+        empty_exit_code = options["empty_exit_code"]
+        failed_exit_code = options["failed_exit_code"]
 
         backend = task_backends[backend_name]
         broker = backend.broker
@@ -164,28 +208,50 @@ class Command(BaseCommand):
                 self.style.WARNING("\nShutdown complete (no task was interrupted).")
             )
 
+        exit_code = self._exit_code(tasks_processed, empty_exit_code, failed_exit_code)
+
         # The Worker finished record is what an operator greps for in a JSON
         # log stream: counts and the exit code stay attached as fields rather
-        # than only being written to stdout. The exit code is always 0 today;
-        # a future scheduler-driven option would feed it here.
+        # than only being written to stdout.
         logger.info(
-            "Worker finished: id=%s processed=%d failed=%d",
+            "Worker finished: id=%s processed=%d failed=%d exit=%d",
             worker_id,
             tasks_processed,
             self.tasks_failed,
+            exit_code,
             extra={
                 "worker_id": worker_id,
                 "backend_alias": backend_name,
                 "queue_name": queue_name,
                 "tasks_processed": tasks_processed,
                 "tasks_failed": self.tasks_failed,
-                "exit_code": 0,
+                "exit_code": exit_code,
             },
         )
 
         self.stdout.write(
             self.style.SUCCESS(f"Worker stopped. Processed {tasks_processed} task(s).")
         )
+
+        if exit_code:
+            sys.exit(exit_code)
+
+    def _exit_code(self, tasks_processed, empty_exit_code, failed_exit_code):
+        """
+        Work out what to report to whatever started the worker.
+
+        Both codes default to 0, which leaves the run indistinguishable from
+        any other successful command — the behaviour before these options
+        existed. A failure wins over an idle run: a broker message the
+        worker could not run at all counts as a failure without adding to
+        the processed count, so both conditions can hold at once, and the
+        failure is the one worth waking someone for.
+        """
+        if self.tasks_failed and failed_exit_code:
+            return failed_exit_code
+        if not tasks_processed and empty_exit_code:
+            return empty_exit_code
+        return 0
 
     def _process_tasks(
         self,
