@@ -395,15 +395,15 @@ with GracefulShutdown(timeout=50) as shutdown:
             break
 ```
 
-| API | Description |
-|-----|-------------|
-| `GracefulShutdown(signals=None, timeout=0, on_signal=None, force_on_repeat=True)` | Context manager that installs the signal handlers |
-| `shutdown.is_set()` | True once a shutdown has been requested |
-| `shutdown.wait(seconds)` | Sleep, returning early (True) when a shutdown is requested |
-| `shutdown.set()` | Request a shutdown programmatically |
-| `executor.process_tasks(..., stop_event=...)` | Stop starting new tasks once the event is set |
-| `broker.receive(..., wait_seconds=...)` | Stops waiting early while the active `GracefulShutdown` is set |
-| `is_shutdown_requested()` | True if the active worker was asked to shut down |
+| API                                                                               | Description                                                    |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `GracefulShutdown(signals=None, timeout=0, on_signal=None, force_on_repeat=True)` | Context manager that installs the signal handlers              |
+| `shutdown.is_set()`                                                               | True once a shutdown has been requested                        |
+| `shutdown.wait(seconds)`                                                          | Sleep, returning early (True) when a shutdown is requested     |
+| `shutdown.set()`                                                                  | Request a shutdown programmatically                            |
+| `executor.process_tasks(..., stop_event=...)`                                     | Stop starting new tasks once the event is set                  |
+| `broker.receive(..., wait_seconds=...)`                                           | Stops waiting early while the active `GracefulShutdown` is set |
+| `is_shutdown_requested()`                                                         | True if the active worker was asked to shut down               |
 
 The same API, with the same names, is in django-database-task.
 
@@ -425,11 +425,11 @@ Tasks live in Redis, so `RedisTask` is an unmanaged model with no table. It
 still takes a `migrate` run for its permissions to be created, after which they
 are granted like any other model's:
 
-| Permission | Grants |
-| --- | --- |
-| `view_redistask` | Read the task list and a task's detail page |
-| `run_redistask` | Run and retry tasks |
-| `delete_redistask` | Delete tasks from Redis |
+| Permission         | Grants                                      |
+| ------------------ | ------------------------------------------- |
+| `view_redistask`   | Read the task list and a task's detail page |
+| `run_redistask`    | Run and retry tasks                         |
+| `delete_redistask` | Delete tasks from Redis                     |
 
 Tasks cannot be added or edited through the admin, so no `add` or `change`
 permission exists.
@@ -457,8 +457,34 @@ Available endpoints:
 
 These endpoints run tasks, expose their arguments and results, and delete task
 history, so they answer `403` until the backend says how to authenticate them.
-Override `get_auth_handler()` to open them. The handler returns `None` to let
-the request through, or a response to refuse it:
+The backend provides a list of handlers through `get_auth_handlers(endpoint)`.
+Each handler takes a request and returns `None` to let it through, or a response
+to refuse it. The handlers are tried in order and the request is accepted as
+soon as one of them accepts it; when every handler rejects it, the first
+rejection is returned. The endpoints are `csrf_exempt`, so the handlers are
+the only thing standing between the caller and task execution: authenticate on
+something the caller has to prove, not on anything the request can claim about
+itself.
+
+The simplest way to open the endpoints is `AUTH_HANDLERS` in the backend
+`OPTIONS`:
+
+```python
+TASKS = {
+    "default": {
+        "BACKEND": "django_tasks_redis.RedisTaskBackend",
+        "OPTIONS": {
+            "AUTH_HANDLERS": [
+                "django_tasks_redis.auth.SharedSecretAuth",
+            ],
+            "AUTH_HANDLER_OPTIONS": {"TOKEN_SETTING": "TASK_API_TOKEN"},
+        },
+    },
+}
+```
+
+A project that needs more than a token overrides `get_auth_handlers()` instead
+and returns its own list:
 
 ```python
 from django.conf import settings
@@ -468,19 +494,44 @@ from django_tasks_redis.backends import RedisTaskBackend
 
 
 class MyTaskBackend(RedisTaskBackend):
-    def get_auth_handler(self):
+    def get_auth_handlers(self, endpoint=None):
         def handler(request):
             if request.headers.get("X-Task-Token") != settings.TASK_ENDPOINT_TOKEN:
                 return JsonResponse({"error": "Forbidden"}, status=403)
             return None
 
-        return handler
+        return [handler]
 ```
 
-Then point `BACKEND` at `myapp.backends.MyTaskBackend`. The endpoints are
-`csrf_exempt`, so the handler is the only thing standing between the caller and
-task execution: authenticate on something the caller has to prove, not on
-anything the request can claim about itself.
+The bundled handlers cover the common cases:
+
+- `SharedSecretAuth` — a bearer token (or any header value) compared with
+  `hmac.compare_digest`. The token can be passed in `OPTIONS`, read from a
+  Django setting with `TOKEN_SETTING`, or read from an environment variable
+  with `TOKEN_ENV`. Reading it from a setting or an env var is preferred over
+  writing it into `OPTIONS`.
+- `HMACAuth` — a signature over `timestamp\nmethod\npath\nbody`, with replay
+  protection (`MAX_AGE`, default 300 seconds, set to `0` to disable). Callers
+  produce the signature with `django_tasks_redis.auth.build_signature()`.
+- `StaffOnlyAuth` — accepts requests from a logged-in staff user; requires
+  `django.contrib.auth.middleware.AuthenticationMiddleware`.
+
+A handler entry in `AUTH_HANDLERS` can be a dotted path, a callable, an
+instance, or a dict with `HANDLER`, `OPTIONS` and `ENDPOINTS`. The last limits
+a handler to a subset of `run`, `run_one`, `status`, `execute` and `purge`,
+so a cron job and the service that calls `execute/<id>/` can use different
+credentials on the same backend:
+
+```python
+"AUTH_HANDLERS": [
+    "django_tasks_redis.auth.SharedSecretAuth",
+    {
+        "HANDLER": "django_tasks_redis.auth.HMACAuth",
+        "OPTIONS": {"SECRET_SETTING": "TASK_CRON_SECRET"},
+        "ENDPOINTS": ["run", "purge"],
+    },
+],
+```
 
 `POST /tasks/run/` drains the whole queue in the request by default; pass
 `max_tasks` to bound it.
@@ -526,13 +577,13 @@ for message in broker.receive(
     broker.ack(message)
 ```
 
-| Method | What it does on a Redis stream |
-|--------|--------------------------------|
-| `receive(queue_name=None, max_messages=1, wait_seconds=0, worker_id=None)` | `XREADGROUP` as the consumer `worker_id`: the messages it already holds first, then new ones in priority order. Messages whose task is no longer `READY`, or whose task is gone, are acknowledged inside the call and not returned |
-| `ack(message)` | `XACK` and `XDEL`. Until it is called the message stays pending for the consumer |
-| `nack(message)` | Nothing. A pending entry is what a stream has instead of redelivery: the same consumer is served it again, or another worker takes it over once it has been idle for `REDIS_CLAIM_TIMEOUT` |
+| Method                                                                     | What it does on a Redis stream                                                                                                                                                                                                                    |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `receive(queue_name=None, max_messages=1, wait_seconds=0, worker_id=None)` | `XREADGROUP` as the consumer `worker_id`: the messages it already holds first, then new ones in priority order. Messages whose task is no longer `READY`, or whose task is gone, are acknowledged inside the call and not returned                |
+| `ack(message)`                                                             | `XACK` and `XDEL`. Until it is called the message stays pending for the consumer                                                                                                                                                                  |
+| `nack(message)`                                                            | Nothing. A pending entry is what a stream has instead of redelivery: the same consumer is served it again, or another worker takes it over once it has been idle for `REDIS_CLAIM_TIMEOUT`                                                        |
 | `claim_stale_messages(worker_id, claim_timeout=None, max_deliveries=None)` | `XPENDING` and `XCLAIM`: take over what a dead consumer left, hand a task it left `RUNNING` back as `READY`, and give up on one started `REDIS_MAX_DELIVERIES` times. Consumers idle for the timeout that hold nothing are removed from the group |
-| `remove_consumer(worker_id)` | `XGROUP DELCONSUMER` on every stream, for a worker on its way out. A consumer that still holds pending messages is kept for the sweep |
+| `remove_consumer(worker_id)`                                               | `XGROUP DELCONSUMER` on every stream, for a worker on its way out. A consumer that still holds pending messages is kept for the sweep                                                                                                             |
 
 `worker_id` is the consumer name in the group, so it has to be the id the
 worker keeps using: a message received as one consumer is only served again

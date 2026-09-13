@@ -6,6 +6,7 @@ import asyncio
 import logging
 import traceback
 import uuid
+from functools import cached_property
 from importlib import import_module
 from inspect import iscoroutinefunction
 
@@ -165,24 +166,77 @@ class RedisTaskBackend(BaseTaskBackend):
         """Build the broker workers consume this backend's tasks through."""
         return self.broker_class(self, self.options)
 
-    def get_auth_handler(self):
+    def get_auth_handlers(self, endpoint=None):
         """
-        Get the authentication handler for task execution endpoints.
+        Get the authentication handlers for the task HTTP endpoints.
 
-        Subclasses must override this to open the HTTP endpoints in
-        ``django_tasks_redis.urls``. The handler is a callable that takes a
-        request and returns:
+        A request is accepted as soon as one handler accepts it, so a backend
+        can let both the service that calls the endpoints (Cloud Tasks, a
+        webhook) and an external cron job in, each with its own credentials.
+
+        Each handler is a callable that takes a request and returns:
         - None if authentication succeeds
-        - An HttpResponse with error details if authentication fails
+        - A response with error details if authentication fails
 
-        Returning None (the default) keeps the endpoints closed: they run and
-        delete tasks, so they cannot be reachable without the project having
-        said how to authenticate them.
+        An empty list keeps the endpoints closed: they run and delete tasks,
+        so they cannot be reachable without the backend having said how to
+        authenticate them.
+
+        Args:
+            endpoint: Name of the endpoint being called (``"run"``,
+                ``"run_one"``, ``"status"``, ``"execute"`` or ``"purge"``),
+                or ``None`` to get every handler regardless of the endpoint
+                it applies to.
 
         Returns:
-            Callable or None
+            list of callables
         """
-        return None
+        handlers = list(self.get_broker_auth_handlers(endpoint))
+        handlers.extend(self.get_configured_auth_handlers(endpoint))
+        return handlers
+
+    def get_broker_auth_handlers(self, endpoint=None):
+        """
+        Get the handlers that authenticate the service calling the endpoints.
+
+        These come from the broker, which knows how the service it talks to
+        signs its requests. The Redis brokers are pull-only: they have nothing
+        to authenticate.
+
+        Returns:
+            list of callables
+        """
+        handlers = []
+        if self.broker is not None:
+            # A broker that is not a TaskBroker has no handler.
+            get_broker_handlers = getattr(self.broker, "get_auth_handlers", None)
+            if get_broker_handlers is not None:
+                handlers.extend(get_broker_handlers(endpoint) or [])
+
+        return handlers
+
+    def get_configured_auth_handlers(self, endpoint=None):
+        """
+        Get the handlers built from the ``AUTH_HANDLERS`` backend option.
+
+        Returns:
+            list of callables
+        """
+        return [
+            handler
+            for handler, endpoints in self._auth_handler_specs
+            if endpoint is None or endpoints is None or endpoint in endpoints
+        ]
+
+    @cached_property
+    def _auth_handler_specs(self):
+        """Load ``AUTH_HANDLERS`` once per backend instance."""
+        from .auth import load_auth_handlers
+
+        return load_auth_handlers(
+            self.options.get("AUTH_HANDLERS"),
+            self.options.get("AUTH_HANDLER_OPTIONS"),
+        )
 
     def enqueue(self, task, args, kwargs):
         """
