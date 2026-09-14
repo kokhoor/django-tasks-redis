@@ -8,6 +8,25 @@ body names the method to override.
 
 ### Added
 
+- **Structured logging.** Task and worker records carry their context as
+  attributes instead of only being baked into the message, so a JSON
+  formatter emits fields an operator can filter on rather than one opaque
+  string. Every task record carries `task_id`, `task_path`, `queue_name`,
+  `priority`, `backend_alias` and `worker_id`; completed runs add `status`
+  (`SUCCESSFUL` or `FAILED`) and `duration_ms`, measured with
+  `time.monotonic()` around the call so it stays accurate when a recovery
+  sweep rewrites the stored timestamps; failures add `error_class`. A new
+  `Task started` record fires before the function call, and the
+  `Task abandoned` record written by `mark_task_failed()` carries the same
+  fields. `run_redis_tasks` emits `Worker started` and `Worker finished`
+  records, the latter with `tasks_processed`, `tasks_failed` and
+  `exit_code`. A new *Structured logging* section in the README carries
+  over the dependency-free `JSONFormatter` example and the `LOGGING`
+  configuration from django-database-task, with the logger name changed
+  to `django_tasks_redis`. `duration_ms` is also the single value a
+  metrics integration reads for its duration histogram, so the backend
+  is the one place that measures it.
+  ([#23](https://github.com/tokibito/django-tasks-redis/issues/23))
 - **`get_auth_handlers(endpoint=None)` and the `AUTH_HANDLERS` /
   `AUTH_HANDLER_OPTIONS` backend options.** A backend returns a list of
   handlers from `get_auth_handlers()`; the views accept a request as soon as

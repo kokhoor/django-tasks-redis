@@ -17,6 +17,7 @@ from django.tasks import task_backends
 from django.tasks.base import TaskResultStatus
 from django.utils.translation import gettext_lazy as _
 
+from django_tasks_redis.backends import task_log_fields
 from django_tasks_redis.shutdown import GracefulShutdown, signal_name
 from django_tasks_redis.utils import generate_worker_id
 
@@ -95,6 +96,23 @@ class Command(BaseCommand):
         broker = backend.broker
         worker_id = generate_worker_id()
 
+        # Counted here rather than returned from the loop because a task can
+        # fail at several depths (the run itself, the broker message that
+        # named it) and every one of them feeds the Worker finished record.
+        self.tasks_failed = 0
+
+        logger.info(
+            "Worker started: id=%s backend=%s",
+            worker_id,
+            backend_name,
+            extra={
+                "worker_id": worker_id,
+                "backend_alias": backend_name,
+                "queue_name": queue_name,
+                "continuous": continuous,
+            },
+        )
+
         # Waiting removes up to `interval` of latency per task. Only continuous
         # workers wait; a one-shot run exits as soon as the queue is empty.
         wait_seconds = (backend.block_timeout or 0) / 1000 if continuous else 0
@@ -145,6 +163,25 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING("\nShutdown complete (no task was interrupted).")
             )
+
+        # The Worker finished record is what an operator greps for in a JSON
+        # log stream: counts and the exit code stay attached as fields rather
+        # than only being written to stdout. The exit code is always 0 today;
+        # a future scheduler-driven option would feed it here.
+        logger.info(
+            "Worker finished: id=%s processed=%d failed=%d",
+            worker_id,
+            tasks_processed,
+            self.tasks_failed,
+            extra={
+                "worker_id": worker_id,
+                "backend_alias": backend_name,
+                "queue_name": queue_name,
+                "tasks_processed": tasks_processed,
+                "tasks_failed": self.tasks_failed,
+                "exit_code": 0,
+            },
+        )
 
         self.stdout.write(
             self.style.SUCCESS(f"Worker stopped. Processed {tasks_processed} task(s).")
@@ -208,10 +245,23 @@ class Command(BaseCommand):
                         backend, broker, message, worker_id
                     )
                 except Exception:
-                    logger.exception("Worker %s failed to process a task", worker_id)
+                    logger.exception(
+                        "Worker %s failed to process a task",
+                        worker_id,
+                        # The stream entry already names the task, its queue
+                        # and its priority, so the record carries the full
+                        # field set without a round trip to Redis.
+                        extra=task_log_fields(
+                            message.raw, worker_id, backend_alias=backend.alias
+                        ),
+                    )
                     self.stderr.write(
                         self.style.ERROR("Failed to process a task, see the logs")
                     )
+                    # The task is not part of `tasks_processed`: the broker
+                    # message is nacked and handed out again. Count it as a
+                    # failure for the Worker finished record either way.
+                    self.tasks_failed += 1
                     if not continuous or shutdown.wait(interval):
                         return tasks_processed
                     continue
@@ -220,6 +270,8 @@ class Command(BaseCommand):
                     continue
 
                 tasks_processed += 1
+                if result.status != TaskResultStatus.SUCCESSFUL:
+                    self.tasks_failed += 1
                 if max_tasks > 0 and tasks_processed >= max_tasks:
                     self.stdout.write(
                         self.style.WARNING(
