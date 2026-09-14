@@ -4,6 +4,7 @@ Redis/Valkey task backend implementation.
 
 import asyncio
 import logging
+import time
 import traceback
 import uuid
 from functools import cached_property
@@ -32,6 +33,64 @@ from .utils import (
 )
 
 logger = logging.getLogger("django_tasks_redis")
+
+
+def task_log_fields(task_data, worker_id=None, **extra):
+    """
+    Build the ``extra`` mapping attached to a task's log records.
+
+    These are the fields an operator filters on once the records go through
+    a structured (JSON) formatter, so they are kept flat and named apart
+    from LogRecord's own attributes.
+
+    Args:
+        task_data: The Redis hash dict for the task, or anything that maps
+            ``task_id`` / ``task_path`` / ``queue_name`` / ``priority`` /
+            ``backend_name`` to its values.
+        worker_id: Worker that ran (or is running) the task, or None when
+            the record is emitted before a worker is known.
+        **extra: Extra fields to merge in last, so a caller can add
+            ``status``, ``duration_ms`` or ``error_class`` without
+            rebuilding the mapping.
+    """
+    fields = {
+        "task_id": task_data.get("task_id"),
+        "task_path": task_data.get("task_path"),
+        "queue_name": task_data.get("queue_name"),
+        "priority": _priority_as_int(task_data.get("priority")),
+        "backend_alias": task_data.get("backend_name"),
+        "worker_id": worker_id,
+    }
+    fields.update(extra)
+    return fields
+
+
+def _priority_as_int(value):
+    """
+    Coerce a priority value read from the Redis hash to an int.
+
+    The hash stores it as a string (the task was written through
+    ``serialize_json``); a None or empty value stays None.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _elapsed_ms(started_monotonic):
+    """
+    Milliseconds since a ``time.monotonic()`` reading, rounded to the ms.
+
+    The wall time of the run is kept apart from the stored ``started_at`` /
+    ``finished_at`` because those are database-style timestamps that can be
+    rewritten by a recovery sweep, and the operator wants the time the task
+    actually spent in the function.
+    """
+    return round((time.monotonic() - started_monotonic) * 1000)
+
 
 # Claim a task for a run: move it to RUNNING and record the attempt, but only
 # from one of the statuses the caller expects. Check and write in one step, or a
@@ -457,18 +516,37 @@ class RedisTaskBackend(BaseTaskBackend):
         try:
             task = self._resolve_task(task_data["task_path"])
             task_result = self._data_to_result(task_data, task)
+            logger.info(
+                "Task started: id=%s path=%s",
+                task_result.id,
+                task_data["task_path"],
+                extra=task_log_fields(task_data, worker_id),
+            )
             task_started.send(sender=self.__class__, task_result=task_result)
         except Exception as e:
-            self._record_error(
-                result_key,
-                task_data,
-                TaskError(
-                    exception_class_path=f"{type(e).__module__}.{type(e).__qualname__}",
-                    traceback=traceback.format_exc(),
+            error = TaskError(
+                exception_class_path=f"{type(e).__module__}.{type(e).__qualname__}",
+                traceback=traceback.format_exc(),
+            )
+            self._record_error(result_key, task_data, error)
+            logger.exception(
+                "Task could not be started: id=%s error=%s",
+                task_id,
+                error.exception_class_path,
+                extra=task_log_fields(
+                    task_data,
+                    worker_id,
+                    status=str(TaskResultStatus.FAILED),
+                    error_class=error.exception_class_path,
                 ),
             )
-            logger.exception("Task could not be started: id=%s", task_id)
             raise
+
+        # Wall time of the run itself, kept apart from started_at / finished_at
+        # because those are stored timestamps and can be rewritten by a recovery
+        # sweep. The operator wants the time the task actually spent in the
+        # function, which is what duration_ms reports.
+        started_monotonic = time.monotonic()
 
         try:
             # Get task function
@@ -521,6 +599,12 @@ class RedisTaskBackend(BaseTaskBackend):
                 "Task completed successfully: id=%s path=%s",
                 final_result.id,
                 task_data["task_path"],
+                extra=task_log_fields(
+                    task_data,
+                    worker_id,
+                    status=str(TaskResultStatus.SUCCESSFUL),
+                    duration_ms=_elapsed_ms(started_monotonic),
+                ),
             )
             task_finished.send(sender=self.__class__, task_result=final_result)
             return final_result
@@ -541,6 +625,13 @@ class RedisTaskBackend(BaseTaskBackend):
                 final_result.id,
                 task_data["task_path"],
                 error.exception_class_path,
+                extra=task_log_fields(
+                    task_data,
+                    worker_id,
+                    status=str(TaskResultStatus.FAILED),
+                    duration_ms=_elapsed_ms(started_monotonic),
+                    error_class=error.exception_class_path,
+                ),
             )
             task_finished.send(sender=self.__class__, task_result=final_result)
             return final_result
@@ -636,13 +727,12 @@ class RedisTaskBackend(BaseTaskBackend):
             return False
 
         task_data = client.hgetall(result_key)
+        abandoned_path = f"{TaskAbandoned.__module__}.{TaskAbandoned.__qualname__}"
         self._record_error(
             result_key,
             task_data,
             TaskError(
-                exception_class_path=(
-                    f"{TaskAbandoned.__module__}.{TaskAbandoned.__qualname__}"
-                ),
+                exception_class_path=abandoned_path,
                 traceback=reason,
             ),
         )
@@ -651,6 +741,12 @@ class RedisTaskBackend(BaseTaskBackend):
             task_id,
             task_data.get("task_path", ""),
             reason,
+            extra=task_log_fields(
+                task_data,
+                worker_id=None,
+                status=str(TaskResultStatus.FAILED),
+                error_class=abandoned_path,
+            ),
         )
         return True
 
