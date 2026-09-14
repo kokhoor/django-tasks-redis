@@ -11,13 +11,13 @@ infrastructure fault (the connection died, NOGROUP, the network
 blipped) and must not be counted as a task failure.
 """
 
+import argparse
 import logging
 from io import StringIO
 from unittest import mock
 
 import pytest
 from django.core.management import call_command
-from django.core.management.base import CommandError
 
 from django_tasks_redis.management.commands.run_redis_tasks import (
     Command,
@@ -35,15 +35,15 @@ class TestExitCodeArgument:
         assert _exit_code_argument("255") == 255
 
     def test_rejects_a_negative_code(self):
-        with pytest.raises(CommandError, match="between 0 and 255"):
+        with pytest.raises(argparse.ArgumentTypeError, match="between 0 and 255"):
             _exit_code_argument("-1")
 
     def test_rejects_an_oversized_code(self):
-        with pytest.raises(CommandError, match="between 0 and 255"):
+        with pytest.raises(argparse.ArgumentTypeError, match="between 0 and 255"):
             _exit_code_argument("256")
 
     def test_rejects_a_non_integer(self):
-        with pytest.raises(CommandError, match="whole numbers"):
+        with pytest.raises(argparse.ArgumentTypeError, match="whole numbers"):
             _exit_code_argument("not-a-number")
 
 
@@ -165,22 +165,52 @@ class TestCommandExitCode:
 
         assert excinfo.value.code == 1
 
-    def test_failed_exit_code_takes_precedence_over_empty(self, clean_redis):
-        # Nothing processed AND a failure recorded: the broker message
-        # named a task the worker could not run, so failed wins.
+    def test_failed_exit_code_takes_precedence_over_empty(self, clean_redis, caplog):
+        # The real shape of "both conditions hold": the broker message
+        # named a task the worker could not run at all (its code no longer
+        # imports, say), so nothing was processed AND a failure was
+        # recorded — failed wins.
+        from tests.tasks import simple_task
+
+        simple_task.enqueue(1, 2)
+
+        with caplog.at_level(logging.INFO, logger="django_tasks_redis"):
+            with mock.patch(
+                "django_tasks_redis.backends.RedisTaskBackend.run_task",
+                side_effect=ImportError("task module is gone"),
+            ):
+                with pytest.raises(SystemExit) as excinfo:
+                    call_command(
+                        "run_redis_tasks",
+                        empty_exit_code=4,
+                        failed_exit_code=1,
+                        stdout=StringIO(),
+                    )
+
+        assert excinfo.value.code == 1
+
+        finished = [
+            r for r in caplog.records if r.getMessage().startswith("Worker finished")
+        ]
+        assert len(finished) == 1
+        assert finished[0].tasks_processed == 0
+        assert finished[0].tasks_failed == 1
+
+    def test_tasks_failed_is_written_after_the_worker_stopped_line(self, clean_redis):
         from tests.tasks import failing_task
 
         failing_task.enqueue()
 
-        with pytest.raises(SystemExit) as excinfo:
-            call_command(
-                "run_redis_tasks",
-                empty_exit_code=4,
-                failed_exit_code=1,
-                stdout=StringIO(),
-            )
+        out = StringIO()
+        with pytest.raises(SystemExit):
+            call_command("run_redis_tasks", failed_exit_code=1, stdout=out)
 
-        assert excinfo.value.code == 1
+        output = out.getvalue()
+        assert "Tasks failed: 1" in output
+        assert "Worker stopped. Processed 1 task(s)." in output
+        assert output.index("Tasks failed: 1") > output.index(
+            "Worker stopped. Processed 1 task(s)."
+        )
 
 
 @pytest.mark.django_db

@@ -14,12 +14,13 @@ Rundeck, cron or systemd timer can branch on; both default to 0 and are
 clamped to 0–255, the range the operating system actually reports.
 """
 
+import argparse
 import logging
 import sys
 from contextlib import ExitStack
 from time import monotonic
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 from django.tasks import task_backends
 from django.tasks.base import TaskResultStatus
 from django.utils.translation import gettext_lazy as _
@@ -36,9 +37,16 @@ def _exit_code_argument(value):
     try:
         code = int(value)
     except ValueError:
-        raise CommandError(f"Exit codes must be whole numbers, not {value!r}") from None
+        # ArgumentTypeError is what argparse turns into a parser error
+        # (exit code 2); a CommandError would escape run_from_argv()
+        # uncaught as a traceback.
+        raise argparse.ArgumentTypeError(
+            f"Exit codes must be whole numbers, not {value!r}"
+        ) from None
     if not 0 <= code <= 255:
-        raise CommandError(f"Exit codes must be between 0 and 255, not {value}")
+        raise argparse.ArgumentTypeError(
+            f"Exit codes must be between 0 and 255, not {code}"
+        )
     return code
 
 
@@ -208,22 +216,16 @@ class Command(BaseCommand):
 
         exit_code = self._exit_code(tasks_processed, empty_exit_code, failed_exit_code)
 
-        # Mirrors django-database-task's run_database_tasks: a human running
-        # the command on a terminal sees the failure count, not just the
-        # log line. The Worker finished log record carries the same number
-        # for a JSON operator.
-        if self.tasks_failed:
-            self.stdout.write(self.style.ERROR(f"Tasks failed: {self.tasks_failed}"))
-
         # The Worker finished record is what an operator greps for in a JSON
         # log stream: counts and the exit code stay attached as fields rather
-        # than only being written to stdout.
+        # than only being written to stdout. The message matches database-
+        # task's verbatim, so a plain-text reader cannot tell the libraries
+        # apart from the line alone.
         logger.info(
-            "Worker finished: id=%s processed=%d failed=%d exit=%d",
+            "Worker finished: id=%s processed=%d failed=%d",
             worker_id,
             tasks_processed,
             self.tasks_failed,
-            exit_code,
             extra={
                 "worker_id": worker_id,
                 "backend_alias": backend_name,
@@ -237,6 +239,13 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(f"Worker stopped. Processed {tasks_processed} task(s).")
         )
+
+        # Mirrors django-database-task's run_database_tasks: the failure
+        # count comes after the run's total line, so a terminal reader sees
+        # how much ran before how much failed. The Worker finished log
+        # record carries the same number for a JSON operator.
+        if self.tasks_failed:
+            self.stdout.write(self.style.ERROR(f"Tasks failed: {self.tasks_failed}"))
 
         if exit_code:
             sys.exit(exit_code)

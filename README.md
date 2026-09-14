@@ -230,6 +230,9 @@ Options:
   --shutdown-timeout SECS   Maximum wait for the running task after SIGTERM/SIGINT
                             before forcing exit (0=wait indefinitely, default: 0)
   --no-graceful-shutdown    Do not install SIGTERM/SIGINT handlers
+  --empty-exit-code CODE    Exit code when no task was processed (default: 0)
+  --failed-exit-code CODE   Exit code when a task failed or could not be run
+                            (default: 0)
 ```
 
 A worker handles one task at a time. Run several processes to process more,
@@ -517,7 +520,8 @@ what happened from the exit code. That is a different shape from a long-running
 worker, and two things make it work: exit codes the scheduler can act on, and
 a lock so a slow run is not overlapped by the next one.
 
-No broker is involved. The scheduler is the trigger, and Redis is the queue.
+The scheduler is the trigger; the worker still reads the Redis stream the
+backend writes to.
 
 ### Exit codes
 
@@ -629,7 +633,8 @@ User=app
 WorkingDirectory=/srv/app
 Environment=DJANGO_SETTINGS_MODULE=myproject.settings
 ExecStart=/usr/bin/flock -n --conflict-exit-code 3 /var/lock/redis-task-worker.lock \
-    /srv/app/venv/bin/python manage.py run_redis_tasks --failed-exit-code=1
+    /srv/app/venv/bin/python manage.py run_redis_tasks \
+    --empty-exit-code=4 --failed-exit-code=1
 
 # An idle run and an overlapping run are both expected, not failures.
 SuccessExitStatus=3 4
