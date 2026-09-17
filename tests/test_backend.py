@@ -108,6 +108,44 @@ class TestRedisTaskBackend:
         assert total == 3
         assert len(tasks) == 3
 
+    def test_get_all_tasks_filters_by_task_path_and_priority(
+        self, redis_backend, clean_redis
+    ):
+        """Test task path and priority narrowing the task listing."""
+        from tests.tasks import high_priority_task, simple_task
+
+        simple_task.enqueue(1, 1)
+        high_priority_task.enqueue()
+
+        tasks, total = redis_backend.get_all_tasks(
+            task_path="tests.tasks.high_priority_task"
+        )
+
+        assert total == 1
+        assert tasks[0]["task_path"] == "tests.tasks.high_priority_task"
+
+        tasks, total = redis_backend.get_all_tasks(priority="10")
+
+        assert total == 1
+        assert tasks[0]["priority"] == "10"
+
+    def test_get_distinct_task_values(self, redis_backend, clean_redis):
+        """Test collecting the distinct values of several fields in one call."""
+        from tests.tasks import email_task, high_priority_task, simple_task
+
+        simple_task.enqueue(1, 1)
+        high_priority_task.enqueue()
+        email_task.enqueue("to@example.com", "Subject", "Body")
+
+        values = redis_backend.get_distinct_task_values(
+            ("status", "queue_name", "priority")
+        )
+
+        assert values["status"] == {TaskResultStatus.READY}
+        assert values["queue_name"] == {"default", "emails"}
+        # Priority defaults to 0; only the high priority task carries 10.
+        assert values["priority"] == {"0", "10"}
+
     def test_get_status_counts(self, redis_backend, clean_redis):
         """Test getting status counts."""
         from tests.tasks import failing_task, simple_task

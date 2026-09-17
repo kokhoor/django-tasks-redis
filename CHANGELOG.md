@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Task list filters in the admin.** The task list's sidebar now filters by
+  status, queue, task path and priority. The filter choices come from one
+  pass over the stored tasks, shared by all four filters, and the filtering
+  itself happens in the pass the listing already makes.
+  ([#45](https://github.com/tokibito/django-tasks-redis/issues/45))
+
 ## 0.3.0
 
 **`get_auth_handler()` is gone.** A project that overrides the singular hook
