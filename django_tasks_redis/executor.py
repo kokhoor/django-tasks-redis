@@ -516,21 +516,12 @@ def get_queue_stats(backend_name="default", queue_name=None):
         queue_name: Optional queue name filter.
 
     Returns:
-        Dict with queue statistics.
+        Dict with queue statistics: the counts per status
+        (``pending_count``, ``running_count``, ``successful_count``,
+        ``failed_count``), the number of delayed tasks not yet due
+        (``delayed_count``), and the enqueue times of the oldest and newest
+        pending task (``oldest_pending_enqueued_at``,
+        ``newest_pending_enqueued_at``), None when the queue has none.
     """
     backend = task_backends[backend_name]
-    client = backend.get_client()
-
-    counts = backend.get_status_counts(queue_name=queue_name)
-
-    delayed_count = 0
-    for qname in backend.broker.queue_names(queue_name):
-        delayed_count += client.zcard(backend.broker.delayed_key(qname))
-
-    return {
-        "pending_count": counts.get(TaskResultStatus.READY, 0),
-        "running_count": counts.get(TaskResultStatus.RUNNING, 0),
-        "successful_count": counts.get(TaskResultStatus.SUCCESSFUL, 0),
-        "failed_count": counts.get(TaskResultStatus.FAILED, 0),
-        "delayed_count": delayed_count,
-    }
+    return backend.get_queue_stats(queue_name=queue_name)

@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Queue age in `get_queue_stats()`.** The dict now carries
+  `oldest_pending_enqueued_at` and `newest_pending_enqueued_at`, the enqueue
+  times of the oldest and newest READY task (`None` when there is none), so
+  an alert can watch how long the oldest pending task has been waiting
+  instead of only how many tasks there are. The backend gained the matching
+  `get_queue_stats()` and `executor.get_queue_stats()` returns its result;
+  the counts and the enqueue times come out of one scan of the results
+  index. The README's new *Monitoring* section points at the queue stats for
+  queue state and at the `task_finished` signal for task duration.
+  ([#46](https://github.com/tokibito/django-tasks-redis/issues/46))
 - **Task list filters in the admin.** The task list's sidebar now filters by
   status, queue, task path and priority. The filter choices come from one
   pass over the stored tasks, shared by all four filters, and the filtering

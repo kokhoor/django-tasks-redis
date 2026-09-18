@@ -177,6 +177,83 @@ class TestExecutor:
         assert stats["pending_count"] == 2
         assert stats["running_count"] == 0
 
+    def test_get_queue_stats_enqueued_times(self, redis_backend, clean_redis):
+        """Test getting the enqueue times of the oldest and newest READY task."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import simple_task
+
+        old_time = timezone.now() - timedelta(hours=2)
+        mid_time = timezone.now() - timedelta(hours=1)
+        new_time = timezone.now()
+
+        results = [simple_task.enqueue(i, i) for i in range(3)]
+        client = redis_backend.get_client()
+        for result, value in zip(results, [old_time, mid_time, new_time], strict=True):
+            result_key = get_result_key(
+                redis_backend.key_prefix, redis_backend.alias, result.id
+            )
+            client.hset(result_key, "enqueued_at", serialize_datetime(value))
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 3
+        assert stats["oldest_pending_enqueued_at"] == old_time
+        assert stats["newest_pending_enqueued_at"] == new_time
+
+    def test_get_queue_stats_no_pending(self, clean_redis):
+        """Test that the enqueue times are None when no task is READY."""
+        from tests.tasks import simple_task
+
+        simple_task.enqueue(1, 2)
+        executor.process_one_task()
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 0
+        assert stats["successful_count"] == 1
+        assert stats["oldest_pending_enqueued_at"] is None
+        assert stats["newest_pending_enqueued_at"] is None
+
+    def test_get_queue_stats_queue_filter(self, redis_backend, clean_redis):
+        """Test that a queue name scopes the counts and the enqueue times."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import email_task, simple_task
+
+        old_time = timezone.now() - timedelta(hours=2)
+        new_time = timezone.now() - timedelta(hours=1)
+
+        default_result = simple_task.enqueue(1, 1)
+        email_result = email_task.enqueue("to@example.com", "Hi", "body")
+        client = redis_backend.get_client()
+        for result, value in [
+            (default_result, old_time),
+            (email_result, new_time),
+        ]:
+            result_key = get_result_key(
+                redis_backend.key_prefix, redis_backend.alias, result.id
+            )
+            client.hset(result_key, "enqueued_at", serialize_datetime(value))
+
+        stats = executor.get_queue_stats(queue_name="emails")
+
+        assert stats["pending_count"] == 1
+        assert stats["oldest_pending_enqueued_at"] == new_time
+        assert stats["newest_pending_enqueued_at"] == new_time
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 2
+        assert stats["oldest_pending_enqueued_at"] == old_time
+        assert stats["newest_pending_enqueued_at"] == new_time
+
     def test_delete_task(self, clean_redis):
         """Test deleting a task."""
         from tests.tasks import simple_task

@@ -943,12 +943,32 @@ class RedisTaskBackend(BaseTaskBackend):
         Returns:
             Dict mapping status to count.
         """
+        counts, _oldest, _newest = self._scan_status_counts(queue_name)
+        return counts
+
+    def _scan_status_counts(self, queue_name=None):
+        """
+        One pass over the results index for the status-count based APIs.
+
+        Returns the counts per status and, from the same scan, the raw
+        ``enqueued_at`` of the oldest and newest READY task, so a caller that
+        wants both does not read the index twice.
+
+        Args:
+            queue_name: Optional queue name filter.
+
+        Returns:
+            Tuple of (counts dict, oldest enqueued_at string, newest
+            enqueued_at string). Both strings are "" when no READY task was
+            found.
+        """
         counts = {
             TaskResultStatus.READY: 0,
             TaskResultStatus.RUNNING: 0,
             TaskResultStatus.SUCCESSFUL: 0,
             TaskResultStatus.FAILED: 0,
         }
+        oldest = newest = ""
 
         for _task_id, task_data in self.iter_task_data():
             if queue_name and task_data.get("queue_name") != queue_name:
@@ -958,4 +978,48 @@ class RedisTaskBackend(BaseTaskBackend):
             if status in counts:
                 counts[status] += 1
 
-        return counts
+            if status == TaskResultStatus.READY:
+                # ISO timestamps compare as strings; the same comparison
+                # get_all_tasks() orders on.
+                enqueued_at = task_data.get("enqueued_at", "")
+                if enqueued_at:
+                    if not oldest or enqueued_at < oldest:
+                        oldest = enqueued_at
+                    if enqueued_at > newest:
+                        newest = enqueued_at
+
+        return counts, oldest, newest
+
+    def get_queue_stats(self, queue_name=None):
+        """
+        Get queue statistics for a dashboard or an alert.
+
+        Args:
+            queue_name: Optional queue name filter.
+
+        Returns:
+            Dict with the counts per status (``pending_count``,
+            ``running_count``, ``successful_count``, ``failed_count``), the
+            number of delayed tasks not yet due (``delayed_count``), and the
+            enqueue times of the oldest and newest READY task
+            (``oldest_pending_enqueued_at``, ``newest_pending_enqueued_at``),
+            None when there is none. A delayed task whose time has not come
+            is READY in the store, so it is part of the pending count and of
+            the range.
+        """
+        counts, oldest, newest = self._scan_status_counts(queue_name)
+
+        delayed_count = 0
+        client = self.get_client()
+        for qname in self.broker.queue_names(queue_name):
+            delayed_count += client.zcard(self.broker.delayed_key(qname))
+
+        return {
+            "pending_count": counts.get(TaskResultStatus.READY, 0),
+            "running_count": counts.get(TaskResultStatus.RUNNING, 0),
+            "successful_count": counts.get(TaskResultStatus.SUCCESSFUL, 0),
+            "failed_count": counts.get(TaskResultStatus.FAILED, 0),
+            "delayed_count": delayed_count,
+            "oldest_pending_enqueued_at": deserialize_datetime(oldest),
+            "newest_pending_enqueued_at": deserialize_datetime(newest),
+        }
