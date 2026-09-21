@@ -519,9 +519,10 @@ def get_queue_stats(backend_name="default", queue_name=None):
         Dict with queue statistics: the counts per status
         (``pending_count``, ``running_count``, ``successful_count``,
         ``failed_count``), the number of delayed tasks not yet due
-        (``delayed_count``), and the enqueue times of the oldest and newest
-        pending task (``oldest_pending_enqueued_at``,
-        ``newest_pending_enqueued_at``), None when the queue has none.
+        (``delayed_count``), and the time the oldest and newest pending
+        task started waiting (``oldest_pending_waiting_since``,
+        ``newest_pending_waiting_since``), ``max(enqueued_at, run_after)``,
+        None when the queue has none.
     """
     backend = task_backends[backend_name]
     return backend.get_queue_stats(queue_name=queue_name)

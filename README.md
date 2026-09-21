@@ -604,10 +604,10 @@ monitoring system, so a collector or a dashboard reads them through the
 library instead of the Redis key layout.
 
 `executor.get_queue_stats()` returns the counts per status, the number of
-delayed tasks that have not come due, and the enqueue times of the oldest and
-newest pending task. How long the oldest pending task has been waiting is the
-signal a stuck queue gives: the counts can look healthy while nothing is
-serving the queue.
+delayed tasks that have not come due, and the time the oldest and newest
+pending task started waiting: `max(enqueued_at, run_after)`. How long the
+oldest pending task has been waiting is the signal a stuck queue gives: the
+counts can look healthy while nothing is serving the queue.
 
 ```python
 from django.utils import timezone
@@ -615,14 +615,15 @@ from django.utils import timezone
 from django_tasks_redis import executor
 
 stats = executor.get_queue_stats()
-if stats["oldest_pending_enqueued_at"]:
-    age = timezone.now() - stats["oldest_pending_enqueued_at"]
+if stats["oldest_pending_waiting_since"]:
+    age = timezone.now() - stats["oldest_pending_waiting_since"]
     print(f"oldest pending task has waited for {age.total_seconds():.0f}s")
 ```
 
 With `queue_name="emails"` the numbers cover that queue alone. A delayed task
 whose time has not come is READY in the store, so it is part of the pending
-count and of the enqueue-time range.
+count, but its waiting time starts at its `run_after`: a task that is not due
+yet does not read as queue age.
 
 Task duration is read from Django's `task_finished` signal, which the backend
 sends with the finished `TaskResult` — for a run that failed as well as one
@@ -648,9 +649,10 @@ wall time is measured from the claim, so it is not the same number as the
 `duration_ms` on the log records (see the Structured logging section), which
 is the time the task function itself spent running, measured with
 `time.monotonic()`. The signal is not sent when the queue gives up on a task
-without running it (`mark_task_failed`): a duration monitor does not see
-abandoned tasks, they show up in the failed count and in the `Task abandoned`
-log record instead.
+without running it (`mark_task_failed`), nor when `run_task` cannot resolve
+the task object after the claim and fails the task: a duration monitor does
+not see those tasks, they show up in the failed count and in the
+`Task abandoned` or `Task could not be started` log records instead.
 
 ## Running from a job scheduler
 
@@ -1027,6 +1029,9 @@ result = executor.run_task_by_id(task_id, allow_retry=True)
 
 # Get pending task count
 count = executor.get_pending_task_count()
+
+# Get queue statistics
+stats = executor.get_queue_stats()
 
 # Purge completed tasks
 deleted = executor.purge_completed_tasks(days=7)
