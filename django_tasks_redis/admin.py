@@ -139,8 +139,8 @@ class RedisTaskChangeList(ChangeList):
     """Custom ChangeList that loads data from Redis instead of database."""
 
     def get_queryset(self, request):
-        # Django 6 collects the declared list filters here; the sidebar and
-        # the filter GET-parameter checks ride on these attributes.
+        # The stock get_queryset() collects the declared list filters; the
+        # sidebar and the filter GET-parameter checks ride on these attributes.
         (
             self.filter_specs,
             self.has_filters,
@@ -209,6 +209,9 @@ class RedisTaskAdmin(admin.ModelAdmin):
     ]
     list_per_page = 50
     list_filter = [StatusFilter, QueueNameFilter, TaskPathFilter, PriorityFilter]
+    # Facet counts aggregate the placeholder queryset; every count would
+    # read 0, so the link is not offered at all.
+    show_facets = admin.ShowFacets.NEVER
     search_fields = ["task_id"]
     actions = ["run_selected_tasks", "retry_failed_tasks", "delete_selected_tasks"]
 

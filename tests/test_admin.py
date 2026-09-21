@@ -429,6 +429,19 @@ class TestRedisTaskAdminViews:
         cl = response.context["cl"]
         assert cl.result_count == 0
 
+    def test_changelist_facets_disabled(self, admin_client, clean_redis):
+        """Test the facet-counts link is not offered and the GET param is inert."""
+        from tests.tasks import simple_task
+
+        simple_task.enqueue(1, 2)
+
+        response = admin_client.get(
+            "/admin/django_tasks_redis/redistask/", {"_facets": "True"}
+        )
+
+        assert response.status_code == 200
+        assert b"Show counts" not in response.content
+
     def test_detail_view(self, admin_client, clean_redis):
         """Test task detail view."""
         from tests.tasks import simple_task
