@@ -10,6 +10,16 @@
   itself happens in the pass the listing already makes.
   ([#45](https://github.com/tokibito/django-tasks-redis/issues/45))
 
+### Fixed
+
+- **`test_wait_blocks_until_timeout` could fail on Windows.** Windows can
+  measure a `threading.Event.wait()` slightly short of its timeout, so the
+  test's `elapsed >= 0.1` failed intermittently there, CI included. The
+  lower bound is now 0.08, still below one Windows clock tick and still
+  failing on an instant return; what the test checks is that `wait()`
+  blocked, not the exact duration.
+  ([#51](https://github.com/tokibito/django-tasks-redis/pull/51))
+
 ## 0.3.0
 
 **`get_auth_handler()` is gone.** A project that overrides the singular hook
