@@ -802,6 +802,8 @@ class RedisTaskBackend(BaseTaskBackend):
         self,
         queue_name=None,
         status=None,
+        task_path=None,
+        priority=None,
         offset=0,
         limit=100,
     ):
@@ -811,6 +813,9 @@ class RedisTaskBackend(BaseTaskBackend):
         Args:
             queue_name: Optional queue name filter.
             status: Optional status filter.
+            task_path: Optional task path filter.
+            priority: Optional priority filter, matched against the stored
+                string form (e.g. "10").
             offset: Starting offset.
             limit: Maximum number of results.
 
@@ -825,6 +830,10 @@ class RedisTaskBackend(BaseTaskBackend):
                 continue
             if status and task_data.get("status") != status:
                 continue
+            if task_path and task_data.get("task_path") != task_path:
+                continue
+            if priority is not None and task_data.get("priority") != str(priority):
+                continue
 
             tasks.append(task_data)
 
@@ -837,6 +846,28 @@ class RedisTaskBackend(BaseTaskBackend):
         tasks = tasks[offset : offset + limit]
 
         return tasks, total
+
+    def get_distinct_task_values(self, fields):
+        """
+        Collect the distinct values of several task fields in a single pass.
+
+        Reading one field per call walks every stored task once per field, so
+        callers that need several fields, like the admin's list filters, ask
+        for all of them at once.
+
+        Args:
+            fields: Iterable of task data field names.
+
+        Returns:
+            Dict mapping each field to the set of its distinct values.
+        """
+        values = {field: set() for field in fields}
+        for _task_id, task_data in self.iter_task_data():
+            for field in values:
+                value = task_data.get(field)
+                if value is not None:
+                    values[field].add(value)
+        return values
 
     def get_task_data(self, task_id):
         """

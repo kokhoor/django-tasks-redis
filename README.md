@@ -831,6 +831,7 @@ The exit codes and what counts as a failure are the same as on Linux; see
 The package provides Django Admin integration for viewing and managing tasks:
 
 - View task list with status, priority, queue
+- Filter the task list by status, queue, task path, or priority
 - Search a task by id
 - Run selected tasks (requires `run_redistask`)
 - Retry failed tasks (requires `run_redistask`)

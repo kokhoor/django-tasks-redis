@@ -7,6 +7,7 @@ in the database, this uses a custom approach with executor API.
 """
 
 from django.contrib import admin, messages
+from django.contrib.admin import SimpleListFilter
 from django.contrib.admin.views.main import ChangeList
 from django.contrib.auth import get_permission_codename
 from django.core.exceptions import PermissionDenied
@@ -19,6 +20,77 @@ from django.utils.translation import gettext_lazy as _
 
 from . import executor
 from .models import RedisTask
+
+FILTER_FIELDS = ("status", "queue_name", "task_path", "priority")
+
+
+def _filter_choices(request, field, sort_key=None):
+    """
+    Build the sidebar choices for one filterable task field.
+
+    The ChangeList asks each filter for its choices separately, so the
+    distinct values are collected once per request and shared: one pass over
+    the stored tasks instead of one per filter.
+    """
+    values = getattr(request, "_distinct_task_values", None)
+    if values is None:
+        values = executor.get_distinct_task_values(FILTER_FIELDS)
+        request._distinct_task_values = values
+    return [(value, value) for value in sorted(values.get(field, ()), key=sort_key)]
+
+
+class StatusFilter(SimpleListFilter):
+    """Sidebar filter over the status of the stored tasks."""
+
+    title = _("Status")
+    parameter_name = "status"
+
+    def lookups(self, request, model_admin):
+        return _filter_choices(request, "status")
+
+    # The filtering happens in RedisTaskChangeList.get_results, reading the
+    # same GET parameter; the queryset is a placeholder with nothing to narrow.
+    def queryset(self, request, queryset):
+        return queryset
+
+
+class QueueNameFilter(SimpleListFilter):
+    """Sidebar filter over the queue name of the stored tasks."""
+
+    title = _("Queue")
+    parameter_name = "queue_name"
+
+    def lookups(self, request, model_admin):
+        return _filter_choices(request, "queue_name")
+
+    def queryset(self, request, queryset):
+        return queryset
+
+
+class TaskPathFilter(SimpleListFilter):
+    """Sidebar filter over the task path of the stored tasks."""
+
+    title = _("Task Path")
+    parameter_name = "task_path"
+
+    def lookups(self, request, model_admin):
+        return _filter_choices(request, "task_path")
+
+    def queryset(self, request, queryset):
+        return queryset
+
+
+class PriorityFilter(SimpleListFilter):
+    """Sidebar filter over the priority of the stored tasks."""
+
+    title = _("Priority")
+    parameter_name = "priority"
+
+    def lookups(self, request, model_admin):
+        return _filter_choices(request, "priority", sort_key=int)
+
+    def queryset(self, request, queryset):
+        return queryset
 
 
 class RedisTaskObject:
@@ -67,7 +139,17 @@ class RedisTaskChangeList(ChangeList):
     """Custom ChangeList that loads data from Redis instead of database."""
 
     def get_queryset(self, request):
-        # Return empty queryset - we'll override get_results
+        # The stock get_queryset() collects the declared list filters; the
+        # sidebar and the filter GET-parameter checks ride on these attributes.
+        (
+            self.filter_specs,
+            self.has_filters,
+            _remaining_lookup_params,
+            _filters_may_have_duplicates,
+            self.has_active_filters,
+        ) = self.get_filters(request)
+        # The listing itself comes from Redis in get_results; this queryset
+        # only satisfies the admin's actions machinery.
         return self.model_admin.model._default_manager.none()
 
     def get_results(self, request):
@@ -78,8 +160,11 @@ class RedisTaskChangeList(ChangeList):
         # as 0-indexed shifts every page by one.
         offset = max(self.page_num - 1, 0) * per_page
 
-        # Get status filter if any
+        # Get filter values if any
         status_filter = request.GET.get("status")
+        queue_name_filter = request.GET.get("queue_name")
+        task_path_filter = request.GET.get("task_path")
+        priority_filter = request.GET.get("priority")
 
         if self.query:
             # search_fields only holds task_id, and a task id is an exact key.
@@ -90,6 +175,9 @@ class RedisTaskChangeList(ChangeList):
             tasks, total = executor.get_tasks(
                 backend_name="default",
                 status=status_filter,
+                queue_name=queue_name_filter,
+                task_path=task_path_filter,
+                priority=priority_filter,
                 offset=offset,
                 limit=per_page,
             )
@@ -120,6 +208,10 @@ class RedisTaskAdmin(admin.ModelAdmin):
         "get_enqueued_at",
     ]
     list_per_page = 50
+    list_filter = [StatusFilter, QueueNameFilter, TaskPathFilter, PriorityFilter]
+    # Facet counts aggregate the placeholder queryset; every count would
+    # read 0, so the link is not offered at all.
+    show_facets = admin.ShowFacets.NEVER
     search_fields = ["task_id"]
     actions = ["run_selected_tasks", "retry_failed_tasks", "delete_selected_tasks"]
 

@@ -136,6 +136,35 @@ class TestExecutor:
 
         assert counts[TaskResultStatus.READY] == 3
 
+    def test_get_tasks_filters_by_task_path_and_priority(self, clean_redis):
+        """Test task path and priority narrowing the task listing."""
+        from tests.tasks import high_priority_task, simple_task
+
+        simple_task.enqueue(1, 1)
+        high_priority_task.enqueue()
+
+        tasks, total = executor.get_tasks(task_path="tests.tasks.simple_task")
+
+        assert total == 1
+        assert tasks[0]["task_path"] == "tests.tasks.simple_task"
+
+        tasks, total = executor.get_tasks(priority="10")
+
+        assert total == 1
+        assert tasks[0]["priority"] == "10"
+
+    def test_get_distinct_task_values(self, clean_redis):
+        """Test getting the distinct values of several fields in one call."""
+        from tests.tasks import email_task, simple_task
+
+        simple_task.enqueue(1, 1)
+        email_task.enqueue("to@example.com", "Subject", "Body")
+
+        values = executor.get_distinct_task_values(("queue_name", "priority"))
+
+        assert values["queue_name"] == {"default", "emails"}
+        assert values["priority"] == {"0"}
+
     def test_get_queue_stats(self, clean_redis):
         """Test getting queue statistics."""
         from tests.tasks import simple_task

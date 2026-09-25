@@ -361,6 +361,87 @@ class TestRedisTaskAdminViews:
         response = admin_client.get("/admin/django_tasks_redis/redistask/")
         assert response.status_code == 200
 
+    def test_changelist_shows_filter_choices(self, admin_client, clean_redis):
+        """Test the sidebar listing the distinct values of each field."""
+        from tests.tasks import email_task, high_priority_task, simple_task
+
+        simple_task.enqueue(1, 2)
+        high_priority_task.enqueue()
+        email_task.enqueue("to@example.com", "Subject", "Body")
+
+        response = admin_client.get("/admin/django_tasks_redis/redistask/")
+
+        specs = {str(spec.title): spec for spec in response.context["cl"].filter_specs}
+        assert set(specs) == {"Status", "Queue", "Task Path", "Priority"}
+        assert ("default", "default") in specs["Queue"].lookup_choices
+        assert ("emails", "emails") in specs["Queue"].lookup_choices
+        assert ("tests.tasks.email_task", "tests.tasks.email_task") in specs[
+            "Task Path"
+        ].lookup_choices
+        # Priorities sort numerically: 0 comes before 10.
+        assert specs["Priority"].lookup_choices == [("0", "0"), ("10", "10")]
+
+    def test_changelist_filter_lookups_read_redis_once(
+        self, admin_client, clean_redis, monkeypatch
+    ):
+        """Test the four filters sharing one distinct-values pass."""
+        from tests.tasks import simple_task
+
+        simple_task.enqueue(1, 2)
+
+        calls = []
+        original = executor.get_distinct_task_values
+
+        def counting(fields, backend_name="default"):
+            calls.append(fields)
+            return original(fields, backend_name=backend_name)
+
+        monkeypatch.setattr(executor, "get_distinct_task_values", counting)
+
+        response = admin_client.get("/admin/django_tasks_redis/redistask/")
+
+        assert response.status_code == 200
+        assert len(calls) == 1
+        assert set(calls[0]) == {"status", "queue_name", "task_path", "priority"}
+
+    def test_changelist_filters_tasks(self, admin_client, clean_redis):
+        """Test the sidebar filters narrowing the task list."""
+        from tests.tasks import high_priority_task, simple_task
+
+        simple_task.enqueue(1, 2)
+        high_priority_task.enqueue()
+
+        base = "/admin/django_tasks_redis/redistask/"
+
+        response = admin_client.get(
+            base, {"task_path": "tests.tasks.high_priority_task"}
+        )
+        cl = response.context["cl"]
+        assert cl.result_count == 1
+        assert cl.result_list[0].task_path == "tests.tasks.high_priority_task"
+
+        response = admin_client.get(base, {"priority": "10"})
+        cl = response.context["cl"]
+        assert cl.result_count == 1
+        assert cl.result_list[0].task_path == "tests.tasks.high_priority_task"
+
+        response = admin_client.get(base, {"queue_name": "emails"})
+        cl = response.context["cl"]
+        assert cl.result_count == 0
+
+    def test_changelist_facets_disabled(self, admin_client, clean_redis):
+        """Test the facet-counts link is not offered and the GET param is inert."""
+        from tests.tasks import simple_task
+
+        simple_task.enqueue(1, 2)
+
+        response = admin_client.get(
+            "/admin/django_tasks_redis/redistask/", {"_facets": "True"}
+        )
+
+        assert response.status_code == 200
+        assert b"Show counts" not in response.content
+
     def test_detail_view(self, admin_client, clean_redis):
         """Test task detail view."""
         from tests.tasks import simple_task
