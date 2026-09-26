@@ -950,18 +950,18 @@ class RedisTaskBackend(BaseTaskBackend):
         """
         One pass over the results index for the status-count based APIs.
 
-        Returns the counts per status and, from the same scan, the raw time
-        the oldest and newest READY task started waiting, as
-        ``max(enqueued_at, run_after)`` strings, so a caller that wants both
-        does not read the index twice.
+        Returns the counts per status and, from the same scan, the time the
+        oldest and newest READY task started waiting, as
+        ``max(enqueued_at, run_after)`` datetimes, so a caller that wants
+        both does not read the index twice.
 
         Args:
             queue_name: Optional queue name filter.
 
         Returns:
-            Tuple of (counts dict, oldest waiting-since string, newest
-            waiting-since string). Both strings are "" when no READY task
-            was found.
+            Tuple of (counts dict, oldest waiting-since datetime, newest
+            waiting-since datetime). Both are None when no READY task was
+            found.
         """
         counts = {
             TaskResultStatus.READY: 0,
@@ -969,7 +969,7 @@ class RedisTaskBackend(BaseTaskBackend):
             TaskResultStatus.SUCCESSFUL: 0,
             TaskResultStatus.FAILED: 0,
         }
-        oldest = newest = ""
+        oldest = newest = None
 
         for _task_id, task_data in self.iter_task_data():
             if queue_name and task_data.get("queue_name") != queue_name:
@@ -980,17 +980,23 @@ class RedisTaskBackend(BaseTaskBackend):
                 counts[status] += 1
 
             if status == TaskResultStatus.READY:
-                # ISO timestamps compare as strings; the same comparison
-                # get_all_tasks() orders on. A delayed task starts waiting
-                # when it comes due, so run_after, when set, is the origin
-                # instead of enqueued_at.
-                enqueued_at = task_data.get("enqueued_at", "")
-                run_after = task_data.get("run_after", "")
-                waiting_since = max(enqueued_at, run_after)
-                if waiting_since:
-                    if not oldest or waiting_since < oldest:
+                # A delayed task starts waiting when it comes due, so
+                # run_after, when set, is the origin instead of enqueued_at.
+                # The max compares datetimes, not the ISO strings: enqueued_at
+                # is written from timezone.now(), while run_after keeps the
+                # caller's offset, and strings with different offsets do not
+                # compare as times.
+                enqueued_at = deserialize_datetime(task_data.get("enqueued_at", ""))
+                run_after = deserialize_datetime(task_data.get("run_after", ""))
+                waiting_since = enqueued_at
+                if run_after is not None and (
+                    waiting_since is None or run_after > waiting_since
+                ):
+                    waiting_since = run_after
+                if waiting_since is not None:
+                    if oldest is None or waiting_since < oldest:
                         oldest = waiting_since
-                    if waiting_since > newest:
+                    if newest is None or waiting_since > newest:
                         newest = waiting_since
 
         return counts, oldest, newest
@@ -1026,6 +1032,6 @@ class RedisTaskBackend(BaseTaskBackend):
             "successful_count": counts.get(TaskResultStatus.SUCCESSFUL, 0),
             "failed_count": counts.get(TaskResultStatus.FAILED, 0),
             "delayed_count": delayed_count,
-            "oldest_pending_waiting_since": deserialize_datetime(oldest),
-            "newest_pending_waiting_since": deserialize_datetime(newest),
+            "oldest_pending_waiting_since": oldest,
+            "newest_pending_waiting_since": newest,
         }

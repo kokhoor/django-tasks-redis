@@ -622,8 +622,9 @@ if stats["oldest_pending_waiting_since"]:
 
 With `queue_name="emails"` the numbers cover that queue alone. A delayed task
 whose time has not come is READY in the store, so it is part of the pending
-count, but its waiting time starts at its `run_after`: a task that is not due
-yet does not read as queue age.
+count, but its waiting time starts at its `run_after`, which can lie in the
+future: a task that is not due yet does not read as queue age, and while only
+such tasks are pending, the wait printed above is negative.
 
 Task duration is read from Django's `task_finished` signal, which the backend
 sends with the finished `TaskResult` — for a run that failed as well as one

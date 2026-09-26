@@ -261,6 +261,78 @@ class TestExecutor:
         assert stats["oldest_pending_waiting_since"] == due_time
         assert stats["newest_pending_waiting_since"] == due_time
 
+    def test_get_queue_stats_past_run_after_other_offset(
+        self, redis_backend, clean_redis
+    ):
+        """Test that a past run_after with another offset is not the waiting time."""
+        from datetime import timedelta
+        from datetime import timezone as datetime_timezone
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import simple_task
+
+        enqueued_time = timezone.now()
+        run_after = (enqueued_time - timedelta(hours=1)).astimezone(
+            datetime_timezone(timedelta(hours=9))
+        )
+
+        result = simple_task.enqueue(1, 1)
+        client = redis_backend.get_client()
+        result_key = get_result_key(
+            redis_backend.key_prefix, redis_backend.alias, result.id
+        )
+        client.hset(
+            result_key,
+            mapping={
+                "enqueued_at": serialize_datetime(enqueued_time),
+                "run_after": serialize_datetime(run_after),
+            },
+        )
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 1
+        assert stats["oldest_pending_waiting_since"] == enqueued_time
+        assert stats["newest_pending_waiting_since"] == enqueued_time
+
+    def test_get_queue_stats_future_run_after_other_offset(
+        self, redis_backend, clean_redis
+    ):
+        """Test that a future run_after with another offset is the waiting time."""
+        from datetime import timedelta
+        from datetime import timezone as datetime_timezone
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import simple_task
+
+        enqueued_time = timezone.now()
+        run_after = (enqueued_time + timedelta(hours=1)).astimezone(
+            datetime_timezone(timedelta(hours=-4))
+        )
+
+        result = simple_task.enqueue(1, 1)
+        client = redis_backend.get_client()
+        result_key = get_result_key(
+            redis_backend.key_prefix, redis_backend.alias, result.id
+        )
+        client.hset(
+            result_key,
+            mapping={
+                "enqueued_at": serialize_datetime(enqueued_time),
+                "run_after": serialize_datetime(run_after),
+            },
+        )
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 1
+        assert stats["oldest_pending_waiting_since"] == run_after
+        assert stats["newest_pending_waiting_since"] == run_after
+
     def test_get_queue_stats_no_pending(self, clean_redis):
         """Test that the waiting times are None when no task is READY."""
         from tests.tasks import simple_task
