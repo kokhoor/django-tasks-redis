@@ -459,6 +459,41 @@ class TestExecutor:
 
         assert deleted == 1
 
+    def test_purge_completed_tasks_filters_by_task_path(
+        self, redis_backend, clean_redis
+    ):
+        """Purging with task_path deletes only that task path's results."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import email_task, simple_task
+
+        simple_result = simple_task.enqueue(1, 2)
+        email_result = email_task.enqueue("a@example.com", "Hello", "Body")
+        executor.run_task_by_id(simple_result.id)
+        executor.run_task_by_id(email_result.id)
+
+        client = redis_backend.get_client()
+        old_time = timezone.now() - timedelta(days=10)
+        for result in (simple_result, email_result):
+            client.hset(
+                get_result_key(
+                    redis_backend.key_prefix, redis_backend.alias, result.id
+                ),
+                "finished_at",
+                serialize_datetime(old_time),
+            )
+
+        deleted = executor.purge_completed_tasks(
+            days=7, task_path="tests.tasks.simple_task"
+        )
+
+        assert deleted == 1
+        assert executor.get_task_by_id(simple_result.id) is None
+        assert executor.get_task_by_id(email_result.id) is not None
+
 
 @pytest.mark.django_db
 class TestProcessTasksStopEvent:

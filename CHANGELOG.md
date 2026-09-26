@@ -4,6 +4,12 @@
 
 ### Added
 
+- **`purge_completed_tasks()` can filter by task path.** A new `task_path`
+  argument limits the purge to the results of one task, so a deployment that
+  keeps results for a long time in general can still clear a single noisy
+  task's results early. The `purge_completed_redis_tasks` command takes the
+  same filter as `--task-path`.
+  ([#47](https://github.com/tokibito/django-tasks-redis/issues/47))
 - **Queue age in `get_queue_stats()`.** The dict now carries
   `oldest_pending_waiting_since` and `newest_pending_waiting_since`, the time
   the oldest and newest READY task started waiting (`None` when there is
