@@ -177,6 +177,212 @@ class TestExecutor:
         assert stats["pending_count"] == 2
         assert stats["running_count"] == 0
 
+    def test_get_queue_stats_waiting_since(self, redis_backend, clean_redis):
+        """Test getting the waiting times of the oldest and newest READY task."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import simple_task
+
+        old_time = timezone.now() - timedelta(hours=2)
+        mid_time = timezone.now() - timedelta(hours=1)
+        new_time = timezone.now()
+
+        results = [simple_task.enqueue(i, i) for i in range(3)]
+        client = redis_backend.get_client()
+        for result, value in zip(results, [old_time, mid_time, new_time], strict=True):
+            result_key = get_result_key(
+                redis_backend.key_prefix, redis_backend.alias, result.id
+            )
+            client.hset(result_key, "enqueued_at", serialize_datetime(value))
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 3
+        assert stats["oldest_pending_waiting_since"] == old_time
+        assert stats["newest_pending_waiting_since"] == new_time
+
+    def test_get_queue_stats_delayed_waiting_since(self, redis_backend, clean_redis):
+        """Test that a delayed task starts waiting at its run_after time."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import simple_task
+
+        run_after = timezone.now() + timedelta(hours=1)
+        old_time = timezone.now() - timedelta(hours=2)
+
+        result = simple_task.using(run_after=run_after).enqueue(1, 1)
+        client = redis_backend.get_client()
+        result_key = get_result_key(
+            redis_backend.key_prefix, redis_backend.alias, result.id
+        )
+        client.hset(result_key, "enqueued_at", serialize_datetime(old_time))
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 1
+        assert stats["delayed_count"] == 1
+        assert stats["oldest_pending_waiting_since"] == run_after
+        assert stats["newest_pending_waiting_since"] == run_after
+
+    def test_get_queue_stats_past_run_after(self, redis_backend, clean_redis):
+        """Test that a due task's waiting time starts at its run_after time."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import simple_task
+
+        old_time = timezone.now() - timedelta(hours=2)
+        due_time = timezone.now() - timedelta(hours=1)
+
+        result = simple_task.enqueue(1, 1)
+        client = redis_backend.get_client()
+        result_key = get_result_key(
+            redis_backend.key_prefix, redis_backend.alias, result.id
+        )
+        client.hset(
+            result_key,
+            mapping={
+                "enqueued_at": serialize_datetime(old_time),
+                "run_after": serialize_datetime(due_time),
+            },
+        )
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 1
+        assert stats["oldest_pending_waiting_since"] == due_time
+        assert stats["newest_pending_waiting_since"] == due_time
+
+    def test_get_queue_stats_past_run_after_other_offset(
+        self, redis_backend, clean_redis
+    ):
+        """Test that a past run_after with another offset is not the waiting time."""
+        from datetime import timedelta
+        from datetime import timezone as datetime_timezone
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import simple_task
+
+        enqueued_time = timezone.now()
+        run_after = (enqueued_time - timedelta(hours=1)).astimezone(
+            datetime_timezone(timedelta(hours=9))
+        )
+
+        result = simple_task.enqueue(1, 1)
+        client = redis_backend.get_client()
+        result_key = get_result_key(
+            redis_backend.key_prefix, redis_backend.alias, result.id
+        )
+        client.hset(
+            result_key,
+            mapping={
+                "enqueued_at": serialize_datetime(enqueued_time),
+                "run_after": serialize_datetime(run_after),
+            },
+        )
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 1
+        assert stats["oldest_pending_waiting_since"] == enqueued_time
+        assert stats["newest_pending_waiting_since"] == enqueued_time
+
+    def test_get_queue_stats_future_run_after_other_offset(
+        self, redis_backend, clean_redis
+    ):
+        """Test that a future run_after with another offset is the waiting time."""
+        from datetime import timedelta
+        from datetime import timezone as datetime_timezone
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import simple_task
+
+        enqueued_time = timezone.now()
+        run_after = (enqueued_time + timedelta(hours=1)).astimezone(
+            datetime_timezone(timedelta(hours=-4))
+        )
+
+        result = simple_task.enqueue(1, 1)
+        client = redis_backend.get_client()
+        result_key = get_result_key(
+            redis_backend.key_prefix, redis_backend.alias, result.id
+        )
+        client.hset(
+            result_key,
+            mapping={
+                "enqueued_at": serialize_datetime(enqueued_time),
+                "run_after": serialize_datetime(run_after),
+            },
+        )
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 1
+        assert stats["oldest_pending_waiting_since"] == run_after
+        assert stats["newest_pending_waiting_since"] == run_after
+
+    def test_get_queue_stats_no_pending(self, clean_redis):
+        """Test that the waiting times are None when no task is READY."""
+        from tests.tasks import simple_task
+
+        simple_task.enqueue(1, 2)
+        executor.process_one_task()
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 0
+        assert stats["successful_count"] == 1
+        assert stats["oldest_pending_waiting_since"] is None
+        assert stats["newest_pending_waiting_since"] is None
+
+    def test_get_queue_stats_queue_filter(self, redis_backend, clean_redis):
+        """Test that a queue name scopes the counts and the waiting times."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import email_task, simple_task
+
+        old_time = timezone.now() - timedelta(hours=2)
+        new_time = timezone.now() - timedelta(hours=1)
+
+        default_result = simple_task.enqueue(1, 1)
+        email_result = email_task.enqueue("to@example.com", "Hi", "body")
+        client = redis_backend.get_client()
+        for result, value in [
+            (default_result, old_time),
+            (email_result, new_time),
+        ]:
+            result_key = get_result_key(
+                redis_backend.key_prefix, redis_backend.alias, result.id
+            )
+            client.hset(result_key, "enqueued_at", serialize_datetime(value))
+
+        stats = executor.get_queue_stats(queue_name="emails")
+
+        assert stats["pending_count"] == 1
+        assert stats["oldest_pending_waiting_since"] == new_time
+        assert stats["newest_pending_waiting_since"] == new_time
+
+        stats = executor.get_queue_stats()
+
+        assert stats["pending_count"] == 2
+        assert stats["oldest_pending_waiting_since"] == old_time
+        assert stats["newest_pending_waiting_since"] == new_time
+
     def test_delete_task(self, clean_redis):
         """Test deleting a task."""
         from tests.tasks import simple_task
