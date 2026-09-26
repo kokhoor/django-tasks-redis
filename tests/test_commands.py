@@ -371,6 +371,44 @@ class TestPurgeCompletedRedisTasksCommand:
         output = out.getvalue()
         assert "Deleted 1 task(s)" in output
 
+    def test_purge_completed_tasks_with_task_path(self, redis_backend, clean_redis):
+        """--task-path deletes only that task path's results."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from django_tasks_redis import executor
+        from django_tasks_redis.utils import get_result_key, serialize_datetime
+        from tests.tasks import email_task, simple_task
+
+        simple_result = simple_task.enqueue(1, 2)
+        email_result = email_task.enqueue("a@example.com", "Hello", "Body")
+        executor.run_task_by_id(simple_result.id)
+        executor.run_task_by_id(email_result.id)
+
+        client = redis_backend.get_client()
+        old_time = timezone.now() - timedelta(days=10)
+        for result in (simple_result, email_result):
+            client.hset(
+                get_result_key(
+                    redis_backend.key_prefix, redis_backend.alias, result.id
+                ),
+                "finished_at",
+                serialize_datetime(old_time),
+            )
+
+        out = StringIO()
+        call_command(
+            "purge_completed_redis_tasks",
+            days=7,
+            task_path="tests.tasks.simple_task",
+            stdout=out,
+        )
+
+        assert "Deleted 1 task(s)" in out.getvalue()
+        assert executor.get_task_by_id(simple_result.id) is None
+        assert executor.get_task_by_id(email_result.id) is not None
+
     def test_purge_uses_the_configured_batch_size_by_default(self, clean_redis):
         """Without --batch-size the REDIS_SCAN_BATCH_SIZE setting applies."""
         from unittest import mock

@@ -4,6 +4,12 @@
 
 ### Added
 
+- **`purge_completed_tasks()` can filter by task path.** A new `task_path`
+  argument limits the purge to the results of one task, so a deployment that
+  keeps results for a long time in general can still clear a single noisy
+  task's results early. The `purge_completed_redis_tasks` command takes the
+  same filter as `--task-path`.
+  ([#47](https://github.com/tokibito/django-tasks-redis/issues/47))
 - **Task list filters in the admin.** The task list's sidebar now filters by
   status, queue, task path and priority. The filter choices come from one
   pass over the stored tasks, shared by all four filters, and the filtering
@@ -33,11 +39,11 @@ body names the method to override.
   by a service manager sending `CTRL_BREAK_EVENT` to its process group,
   finishes the running task before exiting; Ctrl-C, which NSSM and WinSW
   send on stop, was already handled, and nothing on Windows delivers
-  `SIGTERM`. The README's *Graceful Shutdown* section now says which ways of
+  `SIGTERM`. The README's _Graceful Shutdown_ section now says which ways of
   stopping a process on Windows reach the handler and which are a hard kill,
-  *Deployment examples* gained NSSM and WinSW services with the stop timeout
-  set longer than `--shutdown-timeout`, and *Running from a job scheduler*
-  gained a Task Scheduler shape whose *Do not start a new instance* setting
+  _Deployment examples_ gained NSSM and WinSW services with the stop timeout
+  set longer than `--shutdown-timeout`, and _Running from a job scheduler_
+  gained a Task Scheduler shape whose _Do not start a new instance_ setting
   takes the place of `flock`. A new test starts a worker as a child process
   and stops it the way a supervisor would, on every platform.
   ([#41](https://github.com/tokibito/django-tasks-redis/issues/41))
@@ -53,7 +59,7 @@ body names the method to override.
   fetch is an infrastructure fault, logged at `ERROR` but not counted.
   The `Worker finished` log record carries the same exit code, so a
   scheduler and a JSON operator agree on what happened. A new
-  *Running from a job scheduler* section in the README carries over
+  _Running from a job scheduler_ section in the README carries over
   the exit-code table, the `flock` to keep a slow run from being
   overlapped, and the two systemd unit shapes from django-database-task,
   with the command name changed to `run_redis_tasks`.
@@ -72,7 +78,7 @@ body names the method to override.
   records, the latter with `tasks_processed`, `tasks_failed` and
   `exit_code`; the records it writes when the read from the broker raised,
   or when it could not run the task a message named, carry the same fields
-  as the records around them. A new *Structured logging* section in the
+  as the records around them. A new _Structured logging_ section in the
   README lists every record with its level, and carries over the
   dependency-free `JSONFormatter` example and the `LOGGING` configuration
   from django-database-task, with the logger name changed to
@@ -184,7 +190,7 @@ body names the method to override.
   default, which was no timeout up to redis-py 7. redis-py 8 defaults it to 5
   seconds, the length of the default `XREADGROUP` block, so the socket gave
   up the moment the block would have returned and `run_redis_tasks
-  --continuous` logged a traceback and `Failed to process a task` on every
+--continuous` logged a traceback and `Failed to process a task` on every
   idle wait. Tasks still ran. The socket timeout is now passed as `None`
   unless configured, and a configured value at or below `REDIS_BLOCK_TIMEOUT`
   is reported with a warning when the backend starts.
@@ -330,7 +336,7 @@ between finishing the work and recording the result.
   ([#9](https://github.com/tokibito/django-tasks-redis/pull/9))
 - `deserialize_datetime()` returned whatever the stored string carried, so a
   value written under a different `USE_TZ` raised `TypeError: can't compare
-  offset-naive and offset-aware datetimes` inside the worker. Naive and
+offset-naive and offset-aware datetimes` inside the worker. Naive and
   aware values are normalised to the reader's setting, preserving the
   instant. ([#11](https://github.com/tokibito/django-tasks-redis/pull/11))
 - Enqueue writes the task hash, the index entry and the queue entry in one
@@ -352,7 +358,7 @@ between finishing the work and recording the result.
   ([#7](https://github.com/tokibito/django-tasks-redis/pull/7))
 - Django's built-in `delete_selected` action is no longer offered in the
   admin. It deleted from a queryset that is always empty, so it reported
-  success while removing nothing. *Delete selected tasks* is the action that
+  success while removing nothing. _Delete selected tasks_ is the action that
   removes tasks from Redis.
   ([#7](https://github.com/tokibito/django-tasks-redis/pull/7))
 - `get_actions()` accepts the `action_location` argument Django 6.1 passes,
@@ -371,10 +377,10 @@ between finishing the work and recording the result.
 - `run_redis_tasks --workers` is gone from the README. The command never
   defined it. Run more processes to scale.
   ([#6](https://github.com/tokibito/django-tasks-redis/pull/6))
-- A *Permissions* table for the admin, and a section on opening the HTTP
+- A _Permissions_ table for the admin, and a section on opening the HTTP
   endpoints. ([#8](https://github.com/tokibito/django-tasks-redis/pull/8))
-- A *Delivery guarantees* section on what at-least-once means for
-  `REDIS_CLAIM_TIMEOUT` and task design, and a *Connection robustness*
+- A _Delivery guarantees_ section on what at-least-once means for
+  `REDIS_CLAIM_TIMEOUT` and task design, and a _Connection robustness_
   section on the new connection options, including that redis-py's default
   retry policy multiplies the connect timeout.
   ([#9](https://github.com/tokibito/django-tasks-redis/pull/9),

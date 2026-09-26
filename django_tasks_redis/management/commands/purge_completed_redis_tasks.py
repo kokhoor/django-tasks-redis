@@ -29,6 +29,11 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--task-path",
+            default=None,
+            help=_("Only delete tasks with this task path (default: all tasks)"),
+        )
+        parser.add_argument(
             "--batch-size",
             type=int,
             default=None,
@@ -50,6 +55,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         days = options["days"]
         statuses = options["statuses"]
+        task_path = options["task_path"]
         dry_run = options["dry_run"]
         backend_name = options["backend_name"]
         batch_size = options["batch_size"]
@@ -66,6 +72,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Purging completed tasks from backend: {backend_name}")
         self.stdout.write(f"  Days threshold: {days}")
         self.stdout.write(f"  Statuses: {', '.join(str(s) for s in statuses)}")
+        self.stdout.write(f"  Task path: {task_path or 'all tasks'}")
 
         if dry_run:
             self.stdout.write(
@@ -76,6 +83,7 @@ class Command(BaseCommand):
             backend_name=backend_name,
             days=days,
             statuses=statuses,
+            task_path=task_path,
             batch_size=batch_size,
             dry_run=dry_run,
         )

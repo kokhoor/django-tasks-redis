@@ -254,6 +254,7 @@ python manage.py purge_completed_redis_tasks [options]
 Options:
   --days N                Delete tasks completed N+ days ago
   --status STATUS         Target status (default: SUCCESSFUL,FAILED)
+  --task-path TASK_PATH   Only delete tasks with this task path
   --batch-size N          Tasks read per round trip (default: REDIS_SCAN_BATCH_SIZE)
   --dry-run               Only show count, don't delete
   --backend BACKEND_NAME  Backend name (default: default)
@@ -975,6 +976,9 @@ count = executor.get_pending_task_count()
 
 # Purge completed tasks
 deleted = executor.purge_completed_tasks(days=7)
+
+# Purge one task path only
+deleted = executor.purge_completed_tasks(days=7, task_path="myapp.tasks.cleanup")
 ```
 
 ### The stream broker

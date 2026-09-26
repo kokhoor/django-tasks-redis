@@ -324,7 +324,12 @@ def _process_delayed_tasks(backend, queue_name=None):
 
 
 def purge_completed_tasks(
-    backend_name="default", days=7, statuses=None, batch_size=None, dry_run=False
+    backend_name="default",
+    days=7,
+    statuses=None,
+    task_path=None,
+    batch_size=None,
+    dry_run=False,
 ):
     """
     Delete completed tasks older than specified days.
@@ -333,6 +338,7 @@ def purge_completed_tasks(
         backend_name: Backend name (default: "default").
         days: Delete tasks finished more than this many days ago.
         statuses: List of statuses to delete. Default: [SUCCESSFUL, FAILED].
+        task_path: Optional task path filter. Only purge tasks with this task_path.
         batch_size: Tasks read per round trip. If None, uses backend setting.
         dry_run: Count the matching tasks without deleting anything.
 
@@ -360,6 +366,9 @@ def purge_completed_tasks(
         batch_size=batch_size, cleanup=not dry_run
     ):
         if task_data.get("status") not in statuses:
+            continue
+
+        if task_path and task_data.get("task_path") != task_path:
             continue
 
         finished_at = deserialize_datetime(task_data.get("finished_at", ""))
