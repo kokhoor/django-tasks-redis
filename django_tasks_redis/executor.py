@@ -327,9 +327,9 @@ def purge_completed_tasks(
     backend_name="default",
     days=7,
     statuses=None,
-    task_path=None,
     batch_size=None,
     dry_run=False,
+    task_path=None,
 ):
     """
     Delete completed tasks older than specified days.
@@ -338,9 +338,9 @@ def purge_completed_tasks(
         backend_name: Backend name (default: "default").
         days: Delete tasks finished more than this many days ago.
         statuses: List of statuses to delete. Default: [SUCCESSFUL, FAILED].
-        task_path: Optional task path filter. Only purge tasks with this task_path.
         batch_size: Tasks read per round trip. If None, uses backend setting.
         dry_run: Count the matching tasks without deleting anything.
+        task_path: Optional task path filter. Only purge tasks with this task_path.
 
     Returns:
         Number of tasks deleted, or that would be deleted for a dry run.
