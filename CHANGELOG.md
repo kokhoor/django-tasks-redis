@@ -10,6 +10,17 @@
   task's results early. The `purge_completed_redis_tasks` command takes the
   same filter as `--task-path`.
   ([#47](https://github.com/tokibito/django-tasks-redis/issues/47))
+- **Queue age in `get_queue_stats()`.** The dict now carries
+  `oldest_pending_waiting_since` and `newest_pending_waiting_since`, the time
+  the oldest and newest READY task started waiting (`None` when there is
+  none): for a delayed task the clock starts at its `run_after`, the moment
+  it becomes due, not at `enqueued_at`, so a task that is not due yet does
+  not read as queue age. The backend gained the matching `get_queue_stats()`
+  and `executor.get_queue_stats()` returns its result; the counts and the
+  waiting times come out of one scan of the results index. The README's new
+  *Monitoring* section points at the queue stats for queue state and at the
+  `task_finished` signal for task duration.
+  ([#46](https://github.com/tokibito/django-tasks-redis/issues/46))
 - **Task list filters in the admin.** The task list's sidebar now filters by
   status, queue, task path and priority. The filter choices come from one
   pass over the stored tasks, shared by all four filters, and the filtering
