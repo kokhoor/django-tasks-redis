@@ -28,6 +28,7 @@ from django.utils.translation import gettext as _
 
 from django_tasks_redis.backends import task_log_fields
 from django_tasks_redis.shutdown import GracefulShutdown, signal_name
+from django_tasks_redis.supervisor import worker_log_fields
 from django_tasks_redis.utils import generate_worker_id
 
 logger = logging.getLogger("django_tasks_redis")
@@ -171,8 +172,6 @@ class Command(BaseCommand):
             # once, here, rather than by every worker.
             self._supervise(options)
             return
-
-        from django_tasks_redis.supervisor import worker_log_fields
 
         broker = backend.broker
         worker_id = generate_worker_id()
@@ -391,6 +390,7 @@ class Command(BaseCommand):
                         "worker_id": worker_id,
                         "backend_alias": backend.alias,
                         "queue_name": queue_name,
+                        **worker_log_fields(),
                     },
                 )
                 self.stderr.write(

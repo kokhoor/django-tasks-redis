@@ -533,14 +533,16 @@ Every task record carries:
 | `priority` | Priority it was enqueued with |
 | `backend_alias` | Key in the `TASKS` setting |
 | `worker_id` | `hostname-xxxxxxxx` of the worker that ran it |
+| `pid` | Process id of the process that logged it |
+| `worker_index` | The worker's index; absent when it has none (see Running several workers) |
 
 Completed runs add `status` (`SUCCESSFUL` or `FAILED`) and `duration_ms`, the
 wall time of the function call measured with `time.monotonic()` so it stays
 accurate when a recovery sweep rewrites the stored timestamps. Failures also
 add `error_class`. The worker's own start and finish records, and the record
 for a read from the broker that failed, carry `worker_id`, `backend_alias`,
-`queue_name`, and — on finish — `tasks_processed`, `tasks_failed` and
-`exit_code`.
+`queue_name` and the two worker fields above, and — on finish —
+`tasks_processed`, `tasks_failed` and `exit_code`.
 
 | Message | Level | When |
 |---------|-------|------|
